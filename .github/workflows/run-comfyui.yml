@@ -1,4 +1,4 @@
-name: 🎨 ComfyUI Action Runner (Public/Private)
+name: ComfyUI Action Runner
 
 on:
   # Manual trigger to start the session with a choice of mode
@@ -29,10 +29,8 @@ jobs:
       - name: 🔒 Clone Private Source Repository
         uses: actions/checkout@v4
         with:
-          # --- !! REPLACE THIS WITH YOUR PRIVATE REPO PATH !! ---
-          repository: your-org/comfyui-source-private
-          # --- !! ------------------------------------------- !! ---
-          token: ${{ secrets.PRIVATE_REPO_PAT }} # PAT with read access to private repo
+          repository: ssuriya1/comfyui-source-private
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
           path: comfyui-source-private
 
       - name: ⚙️ Build ComfyUI Docker Image
@@ -57,46 +55,118 @@ jobs:
 
           sleep 30 
 
+          # --- CHECK 1: Verify ComfyUI Container Status ---
+          CONTAINER_STATUS=$(docker inspect -f '{{.State.Status}}' comfyui_service)
+          if [ "$CONTAINER_STATUS" != "running" ]; then
+            echo "FATAL ERROR: ComfyUI container is not running. Status: $CONTAINER_STATUS"
+            echo "Container Logs:"
+            docker logs comfyui_service
+            exit 1
+          fi
+          echo "ComfyUI container is confirmed to be running."
+
           # Install, configure, and start Ngrok
-          apt-get update && apt-get install -y wget unzip jq
-          wget https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-linux-amd64.zip
-          unzip ngrok-stable-linux-amd64.zip
+          sudo apt-get update && sudo apt-get install -y wget unzip jq
+          
+          # --- FIX: Use the V3 download link for the ngrok client ---
+          NGROK_V3_URL="https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.zip"
+          wget ${NGROK_V3_URL} -O ngrok.zip
+          unzip ngrok.zip
+          # -----------------------------------------------------
+          
           chmod +x ngrok
-          ./ngrok authtoken ${{ secrets.NGROK_AUTH_TOKEN }} # Use NGROK_AUTH_TOKEN secret
+          ./ngrok authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
           ./ngrok http ${COMFYUI_PORT} --log stdout > ngrok.log &
 
-          sleep 10
-          NGROK_URL=$(curl -s http://127.0.0.1:4040/api/tunnels | jq -r '.tunnels[0].public_url')
+          # --- FIX: Polling Loop for Robust URL Retrieval ---
+          NGROK_URL=""
+          MAX_RETRIES=20
+          RETRY_COUNT=0
+
+          while [ -z "$NGROK_URL" ] && [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            echo "Waiting for ngrok tunnel to establish... (Retry: $((RETRY_COUNT + 1)))"
+            sleep 3
+            
+            # Attempt to pull the URL from the local ngrok API
+            NGROK_URL=$(curl -s http://127.0.0.1:4040/api/tunnels | jq -r '.tunnels[0].public_url' 2>/dev/null)
+            
+            # Use a basic check to ensure the URL is not just 'null' or empty string
+            if [[ "$NGROK_URL" == "null" || -z "$NGROK_URL" ]]; then
+              NGROK_URL=""
+            fi
+
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+          done
+
+          if [ -z "$NGROK_URL" ]; then
+            # --- CHECK 2: Output ngrok logs for specific errors ---
+            echo "------------------------------------------------------"
+            echo "FATAL ERROR: Failed to retrieve ngrok URL after $MAX_RETRIES retries."
+            echo "Dumping the last 20 lines of the ngrok log for diagnosis:"
+            tail -n 20 ngrok.log
+            echo "------------------------------------------------------"
+            exit 1
+          fi
+          # ---------------------------------------------------
 
           echo "--- 🔗 INTERACTIVE ACCESS IS READY ---"
           echo "Access ComfyUI at: $NGROK_URL"
           echo "==================================="
 
-          tail -f /dev/null # Keep job alive until manually cancelled
+          tail -f /dev/null
 
-      # --- PHASE 2: Automated Generation and Artifact (if mode is 'generate') ---
-      - name: ⚙️ Automated Workflow Generation
+      # --- PHASE 2: Automated Generation and Push (if mode is 'generate') ---
+      - name: 🖼️ Automated Workflow Generation & Setup Push
         if: github.event.inputs.mode == 'generate'
+        id: generate_and_set_vars
         run: |
-          OUTPUT_DIR="output/generated_image"
-          mkdir -p $OUTPUT_DIR
+          # 1. Define folder/file names based on current time
+          DATE_FOLDER=$(date +%m-%d)
+          FILENAME=$(date +IMAGE_%Y%m%d_%H%M%S.png)
 
-          # Run the container once to execute the proprietary generation script
+          # Root directory for outputs inside the private repo clone
+          OUTPUT_ROOT="comfyui-source-private/outputs"
+
+          # Create the date-specific folder
+          mkdir -p $OUTPUT_ROOT/$DATE_FOLDER
+
+          # 2. Run the container to generate the image
+          echo "Running generation with prompt: ${{ github.event.inputs.prompt }}"
+
+          # Run the image and volume mount the specific output path
           docker run --rm \
-            # Mount a volume to save the output files locally on the runner
-            -v $(pwd)/$OUTPUT_DIR:/app/ComfyUI/output:rw \
+            # Mount the specific output path to allow the container to save the file
+            -v $(pwd)/$OUTPUT_ROOT/$DATE_FOLDER:/app/ComfyUI/output:rw \
             comfyui-action-image:latest \
-            /bin/bash -c "python3 main.py --workflow comfyui-source-private/workflow.json --prompt '${{ github.event.inputs.prompt }}' --output_path /app/ComfyUI/output"
-          # NOTE: The execution command assumes 'main.py' or a wrapper script in your 
-          # Docker image can accept the workflow path, prompt, and output path in batch mode.
+            /bin/bash -c "python3 main.py --workflow comfyui-source-private/workflow.json --prompt '${{ github.event.inputs.prompt }}' --output_path /app/ComfyUI/output/$FILENAME"
 
-      - name: 📦 Upload Generated Artifact
+          echo "Generation complete. Output saved to: $OUTPUT_ROOT/$DATE_FOLDER/$FILENAME"
+
+          # Set outputs for the next step to use
+          echo "DATE_FOLDER=$DATE_FOLDER" >> $GITHUB_OUTPUT
+          echo "FILENAME=$FILENAME" >> $GITHUB_OUTPUT
+
+      - name: 💾 Commit and Push Output to Private Repo
         if: github.event.inputs.mode == 'generate'
-        uses: actions/upload-artifact@v4
-        with:
-          name: comfyui-output-${{ github.sha }}
-          path: output/generated_image/
-          retention-days: 7
+        env:
+          # Use the repository root path defined in the previous step
+          PRIVATE_REPO_PATH: comfyui-source-private
+        run: |
+          # 1. Configure Git with the PAT
+          cd $PRIVATE_REPO_PATH
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+
+          # Use the PAT to authenticate for the push
+          PAT_URL="https://${{ secrets.PRIVATE_REPO_PAT }}@github.com/${{ github.repository_owner }}/comfyui-source-private.git"
+
+          # 2. Add, Commit, and Push the new files
+          git add outputs
+          git commit -m "feat: Automated ComfyUI generation for ${{ steps.generate_and_set_vars.outputs.DATE_FOLDER }}"
+
+          # Push using the PAT URL
+          git push $PAT_URL HEAD:main
+          echo "Successfully pushed generated output to branch 'main' in the private repository."
 
       - name: 🧹 Cleanup Containers
         if: always()
