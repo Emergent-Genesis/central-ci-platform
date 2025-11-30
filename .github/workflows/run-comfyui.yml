@@ -1,0 +1,108 @@
+name: 🎨 ComfyUI Action Runner (Public/Private)
+
+on:
+  # Manual trigger to start the session with a choice of mode
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Operation Mode: "tunnel" (interactive) or "generate" (artifact backup)'
+        required: true
+        default: "tunnel"
+        type: choice
+        options:
+          - tunnel
+          - generate
+      prompt:
+        description: 'Prompt to use for the "generate" mode.'
+        required: false
+        default: "A highly secured server room with proprietary assets, digital art."
+
+jobs:
+  run-comfyui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360 # 6 hours max job duration (for 'tunnel' mode)
+
+    steps:
+      - name: Checkout Public Workflow Repository
+        uses: actions/checkout@v4
+
+      - name: 🔒 Clone Private Source Repository
+        uses: actions/checkout@v4
+        with:
+          # --- !! REPLACE THIS WITH YOUR PRIVATE REPO PATH !! ---
+          repository: your-org/comfyui-source-private
+          # --- !! ------------------------------------------- !! ---
+          token: ${{ secrets.PRIVATE_REPO_PAT }} # PAT with read access to private repo
+          path: comfyui-source-private
+
+      - name: ⚙️ Build ComfyUI Docker Image
+        run: |
+          echo "Building image from proprietary source..."
+          # Build context and Dockerfile are located in the cloned directory
+          docker build -t comfyui-action-image:latest -f comfyui-source-private/Dockerfile comfyui-source-private
+
+      # --- PHASE 1: Interactive Tunnel (if mode is 'tunnel') ---
+      - name: 🌐 Start ComfyUI and Ngrok Tunnel
+        if: github.event.inputs.mode == 'tunnel'
+        env:
+          COMFYUI_PORT: 8188
+        run: |
+          echo "Starting ComfyUI container and Ngrok tunnel..."
+          # Start the container in detached mode
+          docker run -d \
+            --name comfyui_service \
+            --cap-add=NET_ADMIN \
+            -p ${COMFYUI_PORT}:${COMFYUI_PORT} \
+            comfyui-action-image:latest
+
+          sleep 30 
+
+          # Install, configure, and start Ngrok
+          apt-get update && apt-get install -y wget unzip jq
+          wget https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-linux-amd64.zip
+          unzip ngrok-stable-linux-amd64.zip
+          chmod +x ngrok
+          ./ngrok authtoken ${{ secrets.NGROK_AUTH_TOKEN }} # Use NGROK_AUTH_TOKEN secret
+          ./ngrok http ${COMFYUI_PORT} --log stdout > ngrok.log &
+
+          sleep 10
+          NGROK_URL=$(curl -s http://127.0.0.1:4040/api/tunnels | jq -r '.tunnels[0].public_url')
+
+          echo "--- 🔗 INTERACTIVE ACCESS IS READY ---"
+          echo "Access ComfyUI at: $NGROK_URL"
+          echo "==================================="
+
+          tail -f /dev/null # Keep job alive until manually cancelled
+
+      # --- PHASE 2: Automated Generation and Artifact (if mode is 'generate') ---
+      - name: ⚙️ Automated Workflow Generation
+        if: github.event.inputs.mode == 'generate'
+        run: |
+          OUTPUT_DIR="output/generated_image"
+          mkdir -p $OUTPUT_DIR
+
+          # Run the container once to execute the proprietary generation script
+          docker run --rm \
+            # Mount a volume to save the output files locally on the runner
+            -v $(pwd)/$OUTPUT_DIR:/app/ComfyUI/output:rw \
+            comfyui-action-image:latest \
+            /bin/bash -c "python3 main.py --workflow comfyui-source-private/workflow.json --prompt '${{ github.event.inputs.prompt }}' --output_path /app/ComfyUI/output"
+          # NOTE: The execution command assumes 'main.py' or a wrapper script in your 
+          # Docker image can accept the workflow path, prompt, and output path in batch mode.
+
+      - name: 📦 Upload Generated Artifact
+        if: github.event.inputs.mode == 'generate'
+        uses: actions/upload-artifact@v4
+        with:
+          name: comfyui-output-${{ github.sha }}
+          path: output/generated_image/
+          retention-days: 7
+
+      - name: 🧹 Cleanup Containers
+        if: always()
+        run: |
+          echo "Cleaning up Docker containers..."
+          if [ "${{ github.event.inputs.mode }}" == "tunnel" ]; then
+            docker stop comfyui_service || true
+            docker rm comfyui_service || true
+          fi
