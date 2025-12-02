@@ -1,0 +1,43 @@
+name: ComfyUI Docker Build
+
+on: [push, workflow_dispatch]
+
+jobs:
+  build_image:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free Up Disk Space on Runner
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+
+      - name: Checkout Private Source Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ssuriya1/comfyui-source-private
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+          path: comfyui-source-private
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and Export Docker Image
+        id: build_export
+        run: |
+          IMAGE_TAG="comfyui-action-image:latest"
+          echo "Building image and exporting to artifact..."
+          docker buildx build \
+            --tag $IMAGE_TAG \
+            --output type=docker,dest=${{ runner.temp }}/comfyui-image.tar \
+            --file comfyui-source-private/Dockerfile \
+            comfyui-source-private
+
+      - name: Upload Docker Image Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: comfyui-docker-image
+          path: ${{ runner.temp }}/comfyui-image.tar
+          retention-days: 1
