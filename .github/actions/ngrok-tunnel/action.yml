@@ -1,0 +1,74 @@
+name: "Ngrok Tunnel Setup"
+description: "Sets up, authenticates, and starts an ngrok HTTP tunnel, then retrieves the public URL"
+branding:
+  icon: "globe"
+  color: "blue"
+
+inputs:
+  port:
+    description: "The local port to expose via ngrok"
+    required: true
+  ngrok_token:
+    description: "Your ngrok authorization token"
+    required: true
+
+outputs:
+  ngrok_url:
+    description: "The public ngrok URL that exposes the local port"
+    value: ${{ steps.get-url.outputs.NGROK_URL }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install Ngrok Dependencies
+      shell: bash
+      run: |
+        sudo apt-get update && sudo apt-get install -y wget unzip jq
+
+    - name: Download and Authenticate Ngrok
+      shell: bash
+      run: |
+        # Download the ngrok V3 client
+        NGROK_V3_URL="https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.zip"
+        wget ${NGROK_V3_URL} -O ngrok.zip
+        unzip ngrok.zip
+
+        chmod +x ngrok
+        ./ngrok config add-authtoken ${{ inputs.ngrok_token }}
+
+    - name: Start Ngrok Tunnel and Poll for URL
+      id: get-url
+      shell: bash
+      run: |
+        COMFYUI_PORT=${{ inputs.port }}
+
+        echo "Starting ngrok tunnel for port $COMFYUI_PORT..."
+        ./ngrok http $COMFYUI_PORT --log stdout > ngrok.log &
+
+        # Polling Loop for Robust URL Retrieval
+        NGROK_URL=""
+        MAX_RETRIES=20
+        RETRY_COUNT=0
+
+        while [ -z "$NGROK_URL" ] && [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+          echo "Waiting for ngrok tunnel... (Retry: $((RETRY_COUNT + 1)))"
+          sleep 3
+          
+          # Attempt to pull the URL from the local ngrok API
+          NGROK_URL=$(curl -s http://127.0.0.1:4040/api/tunnels | jq -r '.tunnels[0].public_url' 2>/dev/null)
+          
+          if [[ "$NGROK_URL" == "null" || -z "$NGROK_URL" ]]; then
+            NGROK_URL=""
+          fi
+
+          RETRY_COUNT=$((RETRY_COUNT + 1))
+        done
+
+        if [ -z "$NGROK_URL" ]; then
+          echo "FATAL ERROR: Failed to retrieve ngrok URL after $MAX_RETRIES retries."
+          tail -n 20 ngrok.log
+          exit 1
+        fi
+
+        echo "NGROK_URL=$NGROK_URL" >> $GITHUB_OUTPUT
+        echo "::notice title= ComfyUI Access URL::Access ComfyUI at: $NGROK_URL"
