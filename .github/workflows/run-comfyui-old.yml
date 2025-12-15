@@ -1,18 +1,8 @@
-name: ComfyUI Interactive Session (ngrok)
+name: ComfyUI Interactive Session (ngrok) Old
 
 on:
   workflow_dispatch:
     inputs:
-      model_profile:
-        description: "Select the model profile to run (must be pre-built via comfyui-docker.yml)."
-        required: true
-        default: "basic"
-        type: choice
-        options:
-          - "basic"
-          - "fhdr"
-          - "video-model"
-
       session_duration_hours:
         description: "Duration (hours) to keep the ngrok session alive."
         required: true
@@ -28,6 +18,7 @@ on:
 
 env:
   COMFYUI_PORT: 8188
+  IMAGE_TAG: d57da4163d9d0f8e3d8487c6fc7ab5b322488e65
 
 jobs:
   run_comfyui:
@@ -52,20 +43,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Checkout Code and Docker Compose File
+      - name: Checkout Code for Composite Action
         uses: actions/checkout@v4
 
-      - name: Pull and Run Selected Model with Docker Compose
-        env:
-          COMPOSE_PROJECT_NAME: ${{ github.event.repository.name }}
-          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
-        shell: bash
+      - name: Run ComfyUI Container in Background
         run: |
-          MODEL_PROFILE=${{ inputs.model_profile }}
-
-          echo "--- Pulling and running container for profile: $MODEL_PROFILE ---"
-          docker compose --profile $MODEL_PROFILE pull 
-          docker compose --profile $MODEL_PROFILE up -d
+          docker run -d \
+            --name comfyui \
+            -p ${COMFYUI_PORT}:${COMFYUI_PORT} \
+            ghcr.io/${{ github.repository }}:${{ env.IMAGE_TAG }}
+            
+          echo "ComfyUI container started on port ${COMFYUI_PORT}."
 
       - name: Wait for ComfyUI to Start Up
         run: sleep 120
@@ -91,9 +79,3 @@ jobs:
           echo "=========================================================="
 
           sleep $SECONDS_TO_SLEEP
-
-      - name: Docker Compose Down (Cleanup)
-        if: always()
-        env:
-          COMPOSE_PROJECT_NAME: ${{ github.repository }}
-        run: docker compose down

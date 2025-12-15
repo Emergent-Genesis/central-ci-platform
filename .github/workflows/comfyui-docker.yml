@@ -1,6 +1,17 @@
 name: ComfyUI Docker Build
 
-on: [workflow_dispatch]
+on:
+  workflow_dispatch:
+    inputs:
+      model_profile:
+        description: "Select the model profile to build and push to GHCR."
+        required: true
+        default: "basic"
+        type: choice
+        options:
+          - "basic"
+          - "fhdr"
+          - "video-model"
 
 jobs:
   build_image:
@@ -21,7 +32,7 @@ jobs:
       - name: Checkout Private Source Repository
         uses: actions/checkout@v4
         with:
-          repository: ssuriya1/comfyui-source-private
+          repository: Emergent-Genesis/comfyui-source-private
           token: ${{ secrets.PRIVATE_REPO_PAT }}
           path: comfyui-source-private
 
@@ -33,19 +44,17 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          # The built-in GITHUB_TOKEN is used for GHCR authentication
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and Push Docker Image to GHCR
-        uses: docker/build-push-action@v6
-        with:
-          # Context points to the checked-out subdirectory containing the Dockerfile
-          context: comfyui-source-private/
-          # Path to the Dockerfile within the context
-          file: comfyui-source-private/Dockerfile
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Build and Push ONLY the Selected Image to GHCR
+        env:
+          COMPOSE_PROJECT_NAME: ${{ github.event.repository.name }}
+        shell: bash
+        run: |
+          ls -l
+          echo $COMPOSE_PROJECT_NAME
+          cd comfyui-source-private
+          MODEL_PROFILE=${{ inputs.model_profile }}
+          echo "--- Building $MODEL_PROFILE Model---"
+          docker compose --profile $MODEL_PROFILE build --push
+          echo "Successfully built and pushed image for profile: $MODEL_PROFILE"
