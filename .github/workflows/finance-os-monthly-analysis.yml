@@ -1,0 +1,74 @@
+name: finance-os | Monthly Portfolio Analysis
+
+on:
+  schedule:
+    - cron: '30 14 1 * *'   # 08:00 PM IST on the 1st of each month
+  workflow_dispatch:
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout private repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.PRIVATE_REPO_PATH }}
+          token: ${{ secrets.TOKEN_GITHUB }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11.9'
+
+      - name: Install dependencies
+        run: pip install --upgrade pip setuptools wheel && pip install -r requirements.txt
+
+      - name: Stage 1 — Full data refresh
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TOKEN_GITHUB: ${{ secrets.TOKEN_GITHUB }}
+          GITHUB_REPO: ${{ secrets.PRIVATE_REPO_PATH }}
+        run: python -m src.agents.data_fetcher --mode=full_refresh
+
+      - name: Stage 2 — Math engine scoring
+        env:
+          TOKEN_GITHUB: ${{ secrets.TOKEN_GITHUB }}
+          GITHUB_REPO: ${{ secrets.PRIVATE_REPO_PATH }}
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: python -m src.agents.math_engine --mode=monthly_score
+
+      - name: Install Ollama and pull mistral:7b-instruct
+        run: |
+          curl -fsSL https://ollama.ai/install.sh | sh
+          ollama serve &
+          sleep 8
+          ollama pull mistral:7b-instruct
+
+      - name: Stage 3 — AI advisor (Ollama primary, Gemini fallback)
+        env:
+          OLLAMA_BASE_URL: "http://localhost:11434"
+          OLLAMA_MODEL: "mistral:7b-instruct"
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          TOKEN_GITHUB: ${{ secrets.TOKEN_GITHUB }}
+          GITHUB_REPO: ${{ secrets.PRIVATE_REPO_PATH }}
+        run: python -m src.agents.ai_advisor --mode=monthly_cron
+
+      - name: Stage 4 — Notification generation
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          TOKEN_GITHUB: ${{ secrets.TOKEN_GITHUB }}
+          GITHUB_REPO: ${{ secrets.PRIVATE_REPO_PATH }}
+        run: python -m src.agents.firestore_manager --mode=generate_notifications
+
+      - name: Commit cache to private repo
+        env:
+          TOKEN_GITHUB: ${{ secrets.TOKEN_GITHUB }}
+          PRIVATE_REPO_PATH: ${{ secrets.PRIVATE_REPO_PATH }}
+        run: |
+          git config user.name "finance-os-bot"
+          git config user.email "bot@finance-os.local"
+          git remote set-url origin https://x-access-token:${TOKEN_GITHUB}@github.com/${PRIVATE_REPO_PATH}.git
+          git add data/cache/
+          git diff --staged --quiet || git commit -m "feat: monthly analysis $(date -u +%Y-%m)"
+          git push

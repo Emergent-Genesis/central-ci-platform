@@ -1,0 +1,28 @@
+name: finance-os | Backup Sync
+
+on:
+  repository_dispatch:
+    types: [finance-os-backup-sync]
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout private repo (full history)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.PRIVATE_REPO_PATH }}
+          token: ${{ secrets.TOKEN_GITHUB }}
+          fetch-depth: 0
+          ref: ${{ github.event.client_payload.ref || 'main' }}
+
+      - name: Push to backup repo
+        env:
+          BACKUP_REPO_TOKEN: ${{ secrets.TOKEN_GITHUB }}
+          BACKUP_REPO_PATH: ${{ secrets.BACKUP_REPO_PATH }}
+        run: |
+          git remote add backup \
+            https://x-access-token:${TOKEN_GITHUB}@github.com/${BACKUP_REPO_PATH}.git
+          git push backup main --force
