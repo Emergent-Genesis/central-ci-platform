@@ -17,13 +17,13 @@ jobs:
         with:
           repository: ${{ secrets.PRIVATE_REPO_PATH }}
           token: ${{ secrets.TOKEN_GITHUB }}
-          ref: ${{ github.event.client_payload.ref || 'main' }}
+          ref: ${{ github.event.client_payload.ref || 'Master' }}
 
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
+          # cache: 'npm'
+          # cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
         working-directory: frontend

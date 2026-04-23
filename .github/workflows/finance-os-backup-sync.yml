@@ -18,7 +18,7 @@ jobs:
           repository: ${{ secrets.PRIVATE_REPO_PATH }}
           token: ${{ secrets.TOKEN_GITHUB }}
           fetch-depth: 0
-          ref: ${{ github.event.client_payload.ref || 'main' }}
+          ref: ${{ github.event.client_payload.ref || 'Master' }}
 
       - name: Push to backup repo
         env:
@@ -27,4 +27,4 @@ jobs:
         run: |
           git remote add backup \
             https://x-access-token:${TOKEN_GITHUB}@github.com/${BACKUP_REPO_PATH}.git
-          git push backup main --force
+          git push backup Master --force
