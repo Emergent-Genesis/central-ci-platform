@@ -11,7 +11,6 @@ jobs:
     permissions:
       contents: read
 
-
     steps:
       - name: Checkout private repo
         uses: actions/checkout@v4
@@ -24,23 +23,11 @@ jobs:
           python-version: '3.11.9'
 
       - name: Install dependencies
-        run: pip install --upgrade pip setuptools wheel && pip install -r requirements.txt
+        run: pip install --upgrade pip setuptools wheel && pip install --prefer-binary -r requirements.txt
 
       - name: Run data fetcher
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          TOKEN_GITHUB: ${{ secrets.TOKEN_GITHUB }}
-          GITHUB_REPO: ${{ secrets.PRIVATE_REPO_PATH }}
+          REPO_ACCESS_TOKEN: ${{ secrets.TOKEN_GITHUB }}
+          REPO_NAME: ${{ secrets.PRIVATE_REPO_PATH }}
         run: python -m src.agents.data_fetcher --mode=daily_cache
-
-      - name: Commit cache to private repo
-        env:
-          TOKEN_GITHUB: ${{ secrets.TOKEN_GITHUB }}
-          PRIVATE_REPO_PATH: ${{ secrets.PRIVATE_REPO_PATH }}
-        run: |
-          git config user.name "finance-os-bot"
-          git config user.email "bot@finance-os.local"
-          git remote set-url origin https://x-access-token:${TOKEN_GITHUB}@github.com/${PRIVATE_REPO_PATH}.git
-          git add data/cache/
-          git diff --staged --quiet || git commit -m "chore: daily cache refresh $(date -u +%Y-%m-%d)"
-          git push

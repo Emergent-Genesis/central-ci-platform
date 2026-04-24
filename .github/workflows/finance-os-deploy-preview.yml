@@ -1,13 +1,11 @@
 name: finance-os | Deploy Preview (Firebase Hosting)
 
 on:
-  repository_dispatch:
-    types: [finance-os-deploy-preview]
   workflow_dispatch:
     inputs:
-      head_ref:
+      branch:
         description: Branch name to build
-        required: true
+        required: false
         default: Master
 
 jobs:
@@ -17,16 +15,16 @@ jobs:
       contents: read
 
     steps:
-      - name: Checkout private repo (PR branch)
+      - name: Checkout private repo
         uses: actions/checkout@v4
         with:
           repository: ${{ secrets.PRIVATE_REPO_PATH }}
           token: ${{ secrets.TOKEN_GITHUB }}
-          ref: ${{ github.event.client_payload.head_ref || inputs.head_ref || 'Master' }}
+          ref: ${{ inputs.branch || 'Master' }}
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
@@ -34,7 +32,7 @@ jobs:
         working-directory: frontend
         run: npm ci
 
-      - name: Build Next.js app
+      - name: Build Next.js static export
         working-directory: frontend
         env:
           NEXT_PUBLIC_API_URL: ${{ secrets.NEXT_PUBLIC_API_URL }}
@@ -43,6 +41,7 @@ jobs:
           NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${{ secrets.NEXT_PUBLIC_FIREBASE_PROJECT_ID }}
           NEXT_PUBLIC_FIREBASE_APP_ID: ${{ secrets.NEXT_PUBLIC_FIREBASE_APP_ID }}
         run: npm run build
+        # Outputs to frontend/out/ — firebase.json public dir points here
 
       - name: Deploy to Firebase Hosting (preview channel)
         id: firebase_deploy
@@ -55,21 +54,5 @@ jobs:
           entryPoint: .
         # channelId omitted → Firebase auto-creates a unique preview URL
 
-      # Post the preview URL back as a comment on the private repo's PR
-      - name: Post preview URL to private repo PR
-        if: github.event.client_payload.pr_number != ''
-        uses: actions/github-script@v7
-        env:
-          PREVIEW_URL: ${{ steps.firebase_deploy.outputs.details_url }}
-        with:
-          github-token: ${{ secrets.TOKEN_GITHUB }}
-          script: |
-            const prNumber = ${{ github.event.client_payload.pr_number || 0 }};
-            const [owner, repo] = '${{ secrets.PRIVATE_REPO_PATH }}'.split('/');
-            if (prNumber > 0) {
-              await github.rest.issues.createComment({
-                owner, repo,
-                issue_number: prNumber,
-                body: `🔥 Firebase preview deployed:\n**${process.env.PREVIEW_URL}**\n\nExpires in 7 days.`
-              });
-            }
+      - name: Print preview URL
+        run: echo "Preview URL ${{ steps.firebase_deploy.outputs.details_url }}"

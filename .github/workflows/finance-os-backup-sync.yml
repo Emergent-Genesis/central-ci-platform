@@ -1,9 +1,12 @@
 name: finance-os | Backup Sync
 
 on:
-  repository_dispatch:
-    types: [finance-os-backup-sync]
   workflow_dispatch:
+    inputs:
+      branch:
+        description: Branch to sync
+        required: false
+        default: Master
 
 jobs:
   backup:
@@ -18,7 +21,7 @@ jobs:
           repository: ${{ secrets.PRIVATE_REPO_PATH }}
           token: ${{ secrets.TOKEN_GITHUB }}
           fetch-depth: 0
-          ref: ${{ github.event.client_payload.ref || 'Master' }}
+          ref: ${{ inputs.branch || 'Master' }}
 
       - name: Push to backup repo
         env:
@@ -26,5 +29,5 @@ jobs:
           BACKUP_REPO_PATH: ${{ secrets.BACKUP_REPO_PATH }}
         run: |
           git remote add backup \
-            https://x-access-token:${TOKEN_GITHUB}@github.com/${BACKUP_REPO_PATH}.git
+            https://x-access-token:${BACKUP_REPO_TOKEN}@github.com/${BACKUP_REPO_PATH}.git
           git push backup Master --force

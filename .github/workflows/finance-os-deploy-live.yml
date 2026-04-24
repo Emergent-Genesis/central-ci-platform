@@ -1,9 +1,12 @@
 name: finance-os | Deploy Live (Firebase Hosting)
 
 on:
-  repository_dispatch:
-    types: [finance-os-deploy-live]
   workflow_dispatch:
+    inputs:
+      branch:
+        description: Branch to deploy
+        required: false
+        default: Master
 
 jobs:
   deploy-live:
@@ -17,11 +20,11 @@ jobs:
         with:
           repository: ${{ secrets.PRIVATE_REPO_PATH }}
           token: ${{ secrets.TOKEN_GITHUB }}
-          ref: ${{ github.event.client_payload.ref || 'Master' }}
+          ref: ${{ inputs.branch || 'Master' }}
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
@@ -29,7 +32,7 @@ jobs:
         working-directory: frontend
         run: npm ci
 
-      - name: Build Next.js app
+      - name: Build Next.js static export
         working-directory: frontend
         env:
           NEXT_PUBLIC_API_URL: ${{ secrets.NEXT_PUBLIC_API_URL }}
@@ -38,6 +41,7 @@ jobs:
           NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${{ secrets.NEXT_PUBLIC_FIREBASE_PROJECT_ID }}
           NEXT_PUBLIC_FIREBASE_APP_ID: ${{ secrets.NEXT_PUBLIC_FIREBASE_APP_ID }}
         run: npm run build
+        # Outputs to frontend/out/ — firebase.json public dir points here
 
       - name: Deploy to Firebase Hosting (live channel)
         uses: FirebaseExtended/action-hosting-deploy@v0

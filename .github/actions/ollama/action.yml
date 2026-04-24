@@ -1,0 +1,46 @@
+name: "Start Ollama"
+description: "Logs in to GHCR, pulls the pre-baked Ollama image, and starts it as a local container"
+branding:
+  icon: "cpu"
+  color: "orange"
+
+inputs:
+  model_profile:
+    description: "Model profile to run (must match an image built via build-ollama-image.yml)"
+    required: false
+    default: mistral-7b
+  port:
+    description: "Local port to expose the Ollama API on"
+    required: false
+    default: "11434"
+
+outputs:
+  ollama_url:
+    description: "Base URL for the Ollama API (http://localhost:<port>)"
+    value: ${{ steps.start.outputs.ollama_url }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Log in to GHCR
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+
+    - name: Pull and start Ollama container
+      id: start
+      shell: bash
+      run: |
+        IMAGE="ghcr.io/${{ github.repository_owner }}/ollama-${{ inputs.model_profile }}:latest"
+        echo "Pulling $IMAGE ..."
+        docker pull "$IMAGE"
+        docker run -d --name ollama -p ${{ inputs.port }}:11434 "$IMAGE"
+        echo "Waiting for Ollama API ..."
+        for i in $(seq 1 12); do
+          curl -s "http://localhost:${{ inputs.port }}/api/tags" && echo "" && break
+          echo "  attempt $i / 12 — sleeping 5s"
+          sleep 5
+        done
+        echo "ollama_url=http://localhost:${{ inputs.port }}" >> "$GITHUB_OUTPUT"

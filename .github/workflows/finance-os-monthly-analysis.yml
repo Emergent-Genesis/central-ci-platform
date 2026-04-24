@@ -10,6 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      packages: read    # required to pull Ollama image from GHCR
 
     steps:
       - name: Checkout private repo
@@ -23,54 +24,45 @@ jobs:
           python-version: '3.11.9'
 
       - name: Install dependencies
-        run: pip install --upgrade pip setuptools wheel && pip install -r requirements.txt
+        run: pip install --upgrade pip setuptools wheel && pip install --prefer-binary -r requirements.txt
 
       - name: Stage 1 — Full data refresh
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          TOKEN_GITHUB: ${{ secrets.TOKEN_GITHUB }}
-          GITHUB_REPO: ${{ secrets.PRIVATE_REPO_PATH }}
+          REPO_ACCESS_TOKEN: ${{ secrets.TOKEN_GITHUB }}
+          REPO_NAME: ${{ secrets.PRIVATE_REPO_PATH }}
         run: python -m src.agents.data_fetcher --mode=full_refresh
 
       - name: Stage 2 — Math engine scoring
         env:
-          TOKEN_GITHUB: ${{ secrets.TOKEN_GITHUB }}
-          GITHUB_REPO: ${{ secrets.PRIVATE_REPO_PATH }}
+          REPO_ACCESS_TOKEN: ${{ secrets.TOKEN_GITHUB }}
+          REPO_NAME: ${{ secrets.PRIVATE_REPO_PATH }}
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
         run: python -m src.agents.math_engine --mode=monthly_score
 
-      - name: Install Ollama and pull mistral:7b-instruct
-        run: |
-          curl -fsSL https://ollama.ai/install.sh | sh
-          ollama serve &
-          sleep 8
-          ollama pull mistral:7b-instruct
+      - name: Start Ollama
+        id: ollama
+        uses: ./.github/actions/ollama
+        with:
+          model_profile: mistral-7b
 
       - name: Stage 3 — AI advisor (Ollama primary, Gemini fallback)
         env:
-          OLLAMA_BASE_URL: "http://localhost:11434"
+          OLLAMA_BASE_URL: ${{ steps.ollama.outputs.ollama_url }}
           OLLAMA_MODEL: "mistral:7b-instruct"
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
-          TOKEN_GITHUB: ${{ secrets.TOKEN_GITHUB }}
-          GITHUB_REPO: ${{ secrets.PRIVATE_REPO_PATH }}
+          REPO_ACCESS_TOKEN: ${{ secrets.TOKEN_GITHUB }}
+          REPO_NAME: ${{ secrets.PRIVATE_REPO_PATH }}
         run: python -m src.agents.ai_advisor --mode=monthly_cron
 
       - name: Stage 4 — Notification generation
         env:
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
-          TOKEN_GITHUB: ${{ secrets.TOKEN_GITHUB }}
-          GITHUB_REPO: ${{ secrets.PRIVATE_REPO_PATH }}
+          REPO_ACCESS_TOKEN: ${{ secrets.TOKEN_GITHUB }}
+          REPO_NAME: ${{ secrets.PRIVATE_REPO_PATH }}
         run: python -m src.agents.firestore_manager --mode=generate_notifications
 
-      - name: Commit cache to private repo
-        env:
-          TOKEN_GITHUB: ${{ secrets.TOKEN_GITHUB }}
-          PRIVATE_REPO_PATH: ${{ secrets.PRIVATE_REPO_PATH }}
-        run: |
-          git config user.name "finance-os-bot"
-          git config user.email "bot@finance-os.local"
-          git remote set-url origin https://x-access-token:${TOKEN_GITHUB}@github.com/${PRIVATE_REPO_PATH}.git
-          git add data/cache/
-          git diff --staged --quiet || git commit -m "feat: monthly analysis $(date -u +%Y-%m)"
-          git push
+      - name: Stop Ollama container
+        if: always()
+        run: docker stop ollama && docker rm ollama || true
