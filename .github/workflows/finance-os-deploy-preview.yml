@@ -1,4 +1,8 @@
-name: finance-os | Deploy Preview (Firebase Hosting)
+name: finance-os | Deploy Preview
+
+# Deploys a temporary Firebase Hosting preview channel for the web app.
+# Optionally builds and distributes Android / iOS via Firebase App Distribution.
+# Preview channel URL is printed in the job summary.
 
 on:
   workflow_dispatch:
@@ -7,16 +11,26 @@ on:
         description: Branch name to build
         required: false
         default: Master
+      include_mobile:
+        description: Also build and distribute mobile apps
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - android
+          - ios
+          - both
 
 jobs:
+  # ─── Web Preview ────────────────────────────────────────────────────────────
   deploy-preview:
     runs-on: ubuntu-latest
     permissions:
       contents: read
 
     steps:
-      - name: Checkout private repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           repository: ${{ secrets.PRIVATE_REPO_PATH }}
           token: ${{ secrets.TOKEN_GITHUB }}
@@ -25,23 +39,35 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'npm'
+          cache: npm
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
 
-      - name: Build Next.js static export
+      - name: Inject production environment
         working-directory: frontend
         env:
-          NEXT_PUBLIC_API_URL: ${{ secrets.NEXT_PUBLIC_API_URL }}
-          NEXT_PUBLIC_FIREBASE_API_KEY: ${{ secrets.NEXT_PUBLIC_FIREBASE_API_KEY }}
-          NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ secrets.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN }}
-          NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${{ secrets.NEXT_PUBLIC_FIREBASE_PROJECT_ID }}
-          NEXT_PUBLIC_FIREBASE_APP_ID: ${{ secrets.NEXT_PUBLIC_FIREBASE_APP_ID }}
-        run: npm run build
-        # Outputs to frontend/out/ — firebase.json public dir points here
+          API_URL:                 ${{ secrets.API_URL }}
+          FIREBASE_API_KEY:        ${{ secrets.FIREBASE_API_KEY }}
+          FIREBASE_AUTH_DOMAIN:    ${{ secrets.FIREBASE_AUTH_DOMAIN }}
+          FIREBASE_PROJECT_ID:     ${{ secrets.FIREBASE_PROJECT_ID }}
+          FIREBASE_APP_ID:         ${{ secrets.FIREBASE_APP_ID }}
+          FIREBASE_MEASUREMENT_ID: ${{ secrets.FIREBASE_MEASUREMENT_ID }}
+        run: |
+          sed -i \
+            -e "s|%%API_URL%%|${API_URL}|g" \
+            -e "s|%%FIREBASE_API_KEY%%|${FIREBASE_API_KEY}|g" \
+            -e "s|%%FIREBASE_AUTH_DOMAIN%%|${FIREBASE_AUTH_DOMAIN}|g" \
+            -e "s|%%FIREBASE_PROJECT_ID%%|${FIREBASE_PROJECT_ID}|g" \
+            -e "s|%%FIREBASE_APP_ID%%|${FIREBASE_APP_ID}|g" \
+            -e "s|%%FIREBASE_MEASUREMENT_ID%%|${FIREBASE_MEASUREMENT_ID:-}|g" \
+            src/environments/environment.prod.ts
+
+      - name: Build Angular app (production)
+        working-directory: frontend
+        run: npm run build:prod
 
       - name: Deploy to Firebase Hosting (preview channel)
         id: firebase_deploy
@@ -49,10 +75,72 @@ jobs:
         with:
           repoToken: ${{ secrets.TOKEN_GITHUB }}
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
-          projectId: ${{ secrets.NEXT_PUBLIC_FIREBASE_PROJECT_ID }}
+          projectId: ${{ secrets.FIREBASE_PROJECT_ID }}
           target: finance-os-frontend
           entryPoint: .
         # channelId omitted → Firebase auto-creates a unique preview URL
 
       - name: Print preview URL
         run: echo "Preview URL ${{ steps.firebase_deploy.outputs.details_url }}"
+
+  # ─── Android Preview (optional) ─────────────────────────────────────────────
+  android-preview:
+    if: ${{ inputs.include_mobile == 'android' || inputs.include_mobile == 'both' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.PRIVATE_REPO_PATH }}
+          ref: ${{ inputs.branch || 'Master' }}
+          token: ${{ secrets.TOKEN_GITHUB }}
+
+      - uses: ./.github/actions/build-android
+        with:
+          api_url:                    ${{ secrets.API_URL }}
+          firebase_api_key:           ${{ secrets.FIREBASE_API_KEY }}
+          firebase_auth_domain:       ${{ secrets.FIREBASE_AUTH_DOMAIN }}
+          firebase_project_id:        ${{ secrets.FIREBASE_PROJECT_ID }}
+          firebase_app_id:            ${{ secrets.FIREBASE_APP_ID }}
+          firebase_measurement_id:    ${{ secrets.FIREBASE_MEASUREMENT_ID }}
+          android_signing_key_base64: ${{ secrets.ANDROID_SIGNING_KEY_BASE64 }}
+          android_key_alias:          ${{ secrets.ANDROID_KEY_ALIAS }}
+          android_keystore_password:  ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          android_key_password:       ${{ secrets.ANDROID_KEY_PASSWORD }}
+          firebase_android_app_id:    ${{ secrets.FIREBASE_ANDROID_APP_ID }}
+          firebase_service_account_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          branch_name:                ${{ inputs.branch || 'Master' }}
+
+  # ─── iOS Preview (optional) ─────────────────────────────────────────────────
+  ios-preview:
+    if: ${{ inputs.include_mobile == 'ios' || inputs.include_mobile == 'both' }}
+    runs-on: macos-latest
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.PRIVATE_REPO_PATH }}
+          ref: ${{ inputs.branch || 'Master' }}
+          token: ${{ secrets.TOKEN_GITHUB }}
+
+      - uses: ./.github/actions/build-ios
+        with:
+          api_url:                    ${{ secrets.API_URL }}
+          firebase_api_key:           ${{ secrets.FIREBASE_API_KEY }}
+          firebase_auth_domain:       ${{ secrets.FIREBASE_AUTH_DOMAIN }}
+          firebase_project_id:        ${{ secrets.FIREBASE_PROJECT_ID }}
+          firebase_app_id:            ${{ secrets.FIREBASE_APP_ID }}
+          firebase_measurement_id:    ${{ secrets.FIREBASE_MEASUREMENT_ID }}
+          ios_p12_base64:             ${{ secrets.IOS_P12_BASE64 }}
+          ios_p12_password:           ${{ secrets.IOS_P12_PASSWORD }}
+          ios_code_sign_identity:     ${{ secrets.IOS_CODE_SIGN_IDENTITY }}
+          ios_provisioning_profile:   ${{ secrets.IOS_PROVISIONING_PROFILE }}
+          firebase_ios_app_id:        ${{ secrets.FIREBASE_IOS_APP_ID }}
+          firebase_service_account_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          branch_name:                ${{ inputs.branch || 'Master' }}

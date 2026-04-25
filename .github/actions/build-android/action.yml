@@ -1,0 +1,117 @@
+name: "Build Android (Finance OS)"
+description: "Builds the Finance OS Angular app, signs the APK, and distributes via Firebase App Distribution. Code must be checked out by the calling workflow before this action runs."
+branding:
+  icon: "smartphone"
+  color: "green"
+
+inputs:
+  api_url:
+    description: "Backend API URL (injected into environment.prod.ts)"
+    required: true
+  firebase_api_key:
+    description: "Firebase Web API Key"
+    required: true
+  firebase_auth_domain:
+    description: "Firebase Auth Domain"
+    required: true
+  firebase_project_id:
+    description: "Firebase Project ID"
+    required: true
+  firebase_app_id:
+    description: "Firebase Web App ID"
+    required: true
+  firebase_measurement_id:
+    description: "Firebase Measurement ID (GA4)"
+    required: false
+    default: ""
+  android_signing_key_base64:
+    description: "Base64-encoded .jks keystore file"
+    required: true
+  android_key_alias:
+    description: "Key alias inside the keystore"
+    required: true
+  android_keystore_password:
+    description: "Keystore password"
+    required: true
+  android_key_password:
+    description: "Key password"
+    required: true
+  firebase_android_app_id:
+    description: "Firebase Android App ID for App Distribution (format: 1:xxx:android:yyy)"
+    required: true
+  firebase_service_account_json:
+    description: "Firebase service account JSON (raw JSON, not base64 — same secret used for Firebase Hosting deploy)"
+    required: true
+  branch_name:
+    description: "Branch name used in release notes"
+    required: false
+    default: "Master"
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+        cache: npm
+        cache-dependency-path: frontend/package-lock.json
+
+    - uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: temurin
+
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+
+    - name: Install Node dependencies
+      shell: bash
+      working-directory: frontend
+      run: npm ci
+
+    - name: Inject production environment
+      shell: bash
+      working-directory: frontend
+      run: |
+        sed -i \
+          -e "s|%%API_URL%%|${{ inputs.api_url }}|g" \
+          -e "s|%%FIREBASE_API_KEY%%|${{ inputs.firebase_api_key }}|g" \
+          -e "s|%%FIREBASE_AUTH_DOMAIN%%|${{ inputs.firebase_auth_domain }}|g" \
+          -e "s|%%FIREBASE_PROJECT_ID%%|${{ inputs.firebase_project_id }}|g" \
+          -e "s|%%FIREBASE_APP_ID%%|${{ inputs.firebase_app_id }}|g" \
+          -e "s|%%FIREBASE_MEASUREMENT_ID%%|${{ inputs.firebase_measurement_id }}|g" \
+          src/environments/environment.prod.ts
+
+    - name: Build Angular (production)
+      shell: bash
+      working-directory: frontend
+      run: npm run build:prod
+
+    - name: Capacitor sync Android
+      shell: bash
+      working-directory: frontend
+      run: npx cap sync android
+
+    - name: Build release APK
+      shell: bash
+      working-directory: frontend/android
+      run: ./gradlew assembleRelease
+
+    - name: Sign APK
+      id: sign
+      uses: r0adkll/sign-android-release@v1
+      with:
+        releaseDirectory: frontend/android/app/build/outputs/apk/release
+        signingKeyBase64: ${{ inputs.android_signing_key_base64 }}
+        alias: ${{ inputs.android_key_alias }}
+        keyStorePassword: ${{ inputs.android_keystore_password }}
+        keyPassword: ${{ inputs.android_key_password }}
+
+    - name: Distribute to Firebase App Distribution
+      uses: wzieba/Firebase-Distribution-Github-Action@v1
+      with:
+        appId: ${{ inputs.firebase_android_app_id }}
+        serviceCredentialsFileContent: ${{ inputs.firebase_service_account_json }}
+        groups: testers
+        releaseNotes: "Finance OS Android — branch: ${{ inputs.branch_name }}"
+        file: ${{ steps.sign.outputs.signedReleaseFile }}

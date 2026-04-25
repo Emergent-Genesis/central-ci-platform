@@ -1,0 +1,108 @@
+name: finance-os | Deploy Mobile (Android / iOS)
+
+# Builds the Angular + Ionic + Capacitor app for Android and/or iOS,
+# signs the output, and distributes via Firebase App Distribution (no artifact uploads).
+#
+# Required secrets (central-ci-platform repo → Settings → Secrets):
+#   Standard Finance OS:
+#     TOKEN_GITHUB                  — PAT to checkout private repo
+#     PRIVATE_REPO_PATH             — owner/finance-os
+#     API_URL                       — Render.com backend URL
+#     FIREBASE_API_KEY              — Firebase Web API Key
+#     FIREBASE_AUTH_DOMAIN          — e.g. ifinancial-os.firebaseapp.com
+#     FIREBASE_PROJECT_ID           — ifinancial-os
+#     FIREBASE_APP_ID               — Firebase Web App ID
+#     FIREBASE_MEASUREMENT_ID       — GA4 Measurement ID
+#     FIREBASE_SERVICE_ACCOUNT_JSON — raw JSON (used by Firebase App Distribution)
+#   Android:
+#     ANDROID_SIGNING_KEY_BASE64    — base64-encoded .jks keystore
+#     ANDROID_KEY_ALIAS             — key alias
+#     ANDROID_KEYSTORE_PASSWORD     — keystore password
+#     ANDROID_KEY_PASSWORD          — key password
+#     FIREBASE_ANDROID_APP_ID       — Firebase Android App ID (1:xxx:android:yyy)
+#   iOS:
+#     IOS_P12_BASE64                — base64-encoded .p12 distribution certificate
+#     IOS_P12_PASSWORD              — P12 password
+#     IOS_CODE_SIGN_IDENTITY        — e.g. "Apple Distribution: Name (TEAM_ID)"
+#     IOS_PROVISIONING_PROFILE      — provisioning profile name
+#     FIREBASE_IOS_APP_ID           — Firebase iOS App ID (1:xxx:ios:yyy)
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Branch to build
+        required: false
+        default: Master
+      platform:
+        description: Target platform
+        required: true
+        default: android
+        type: choice
+        options:
+          - android
+          - ios
+          - both
+
+jobs:
+  # ─── Android ──────────────────────────────────────────────────────────────
+  android:
+    if: ${{ inputs.platform == 'android' || inputs.platform == 'both' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.PRIVATE_REPO_PATH }}
+          ref: ${{ inputs.branch || 'Master' }}
+          token: ${{ secrets.TOKEN_GITHUB }}
+
+      - uses: ./.github/actions/build-android
+        with:
+          api_url:                    ${{ secrets.API_URL }}
+          firebase_api_key:           ${{ secrets.FIREBASE_API_KEY }}
+          firebase_auth_domain:       ${{ secrets.FIREBASE_AUTH_DOMAIN }}
+          firebase_project_id:        ${{ secrets.FIREBASE_PROJECT_ID }}
+          firebase_app_id:            ${{ secrets.FIREBASE_APP_ID }}
+          firebase_measurement_id:    ${{ secrets.FIREBASE_MEASUREMENT_ID }}
+          android_signing_key_base64: ${{ secrets.ANDROID_SIGNING_KEY_BASE64 }}
+          android_key_alias:          ${{ secrets.ANDROID_KEY_ALIAS }}
+          android_keystore_password:  ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          android_key_password:       ${{ secrets.ANDROID_KEY_PASSWORD }}
+          firebase_android_app_id:    ${{ secrets.FIREBASE_ANDROID_APP_ID }}
+          firebase_service_account_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          branch_name:                ${{ inputs.branch || 'Master' }}
+
+  # ─── iOS ──────────────────────────────────────────────────────────────────
+  ios:
+    if: ${{ inputs.platform == 'ios' || inputs.platform == 'both' }}
+    runs-on: macos-latest
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.PRIVATE_REPO_PATH }}
+          ref: ${{ inputs.branch || 'Master' }}
+          token: ${{ secrets.TOKEN_GITHUB }}
+
+      - uses: ./.github/actions/build-ios
+        with:
+          api_url:                    ${{ secrets.API_URL }}
+          firebase_api_key:           ${{ secrets.FIREBASE_API_KEY }}
+          firebase_auth_domain:       ${{ secrets.FIREBASE_AUTH_DOMAIN }}
+          firebase_project_id:        ${{ secrets.FIREBASE_PROJECT_ID }}
+          firebase_app_id:            ${{ secrets.FIREBASE_APP_ID }}
+          firebase_measurement_id:    ${{ secrets.FIREBASE_MEASUREMENT_ID }}
+          ios_p12_base64:             ${{ secrets.IOS_P12_BASE64 }}
+          ios_p12_password:           ${{ secrets.IOS_P12_PASSWORD }}
+          ios_code_sign_identity:     ${{ secrets.IOS_CODE_SIGN_IDENTITY }}
+          ios_provisioning_profile:   ${{ secrets.IOS_PROVISIONING_PROFILE }}
+          firebase_ios_app_id:        ${{ secrets.FIREBASE_IOS_APP_ID }}
+          firebase_service_account_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          branch_name:                ${{ inputs.branch || 'Master' }}

@@ -1,0 +1,132 @@
+name: "Build iOS (Finance OS)"
+description: "Builds the Finance OS Angular app, archives and exports an IPA, and distributes via Firebase App Distribution. Code must be checked out by the calling workflow. Must run on a macOS runner."
+branding:
+  icon: "smartphone"
+  color: "blue"
+
+inputs:
+  api_url:
+    description: "Backend API URL (injected into environment.prod.ts)"
+    required: true
+  firebase_api_key:
+    description: "Firebase Web API Key"
+    required: true
+  firebase_auth_domain:
+    description: "Firebase Auth Domain"
+    required: true
+  firebase_project_id:
+    description: "Firebase Project ID"
+    required: true
+  firebase_app_id:
+    description: "Firebase Web App ID"
+    required: true
+  firebase_measurement_id:
+    description: "Firebase Measurement ID (GA4)"
+    required: false
+    default: ""
+  ios_p12_base64:
+    description: "Base64-encoded Apple .p12 distribution certificate"
+    required: true
+  ios_p12_password:
+    description: "P12 certificate password"
+    required: true
+  ios_code_sign_identity:
+    description: "Code signing identity (e.g. 'Apple Distribution: Name (TEAM_ID)')"
+    required: true
+  ios_provisioning_profile:
+    description: "Provisioning profile name"
+    required: true
+  firebase_ios_app_id:
+    description: "Firebase iOS App ID for App Distribution (format: 1:xxx:ios:yyy)"
+    required: true
+  firebase_service_account_json:
+    description: "Firebase service account JSON (raw JSON, not base64)"
+    required: true
+  branch_name:
+    description: "Branch name used in release notes"
+    required: false
+    default: "Master"
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+        cache: npm
+        cache-dependency-path: frontend/package-lock.json
+
+    - name: Install Node dependencies
+      shell: bash
+      working-directory: frontend
+      run: npm ci
+
+    - name: Inject production environment
+      shell: bash
+      working-directory: frontend
+      # macOS requires `sed -i ''` (BSD sed, no backup extension without the empty string)
+      run: |
+        sed -i '' \
+          -e "s|%%API_URL%%|${{ inputs.api_url }}|g" \
+          -e "s|%%FIREBASE_API_KEY%%|${{ inputs.firebase_api_key }}|g" \
+          -e "s|%%FIREBASE_AUTH_DOMAIN%%|${{ inputs.firebase_auth_domain }}|g" \
+          -e "s|%%FIREBASE_PROJECT_ID%%|${{ inputs.firebase_project_id }}|g" \
+          -e "s|%%FIREBASE_APP_ID%%|${{ inputs.firebase_app_id }}|g" \
+          -e "s|%%FIREBASE_MEASUREMENT_ID%%|${{ inputs.firebase_measurement_id }}|g" \
+          src/environments/environment.prod.ts
+
+    - name: Build Angular (production)
+      shell: bash
+      working-directory: frontend
+      run: npm run build:prod
+
+    - name: Install CocoaPods
+      shell: bash
+      run: gem install cocoapods
+
+    - name: Capacitor sync iOS
+      shell: bash
+      working-directory: frontend
+      run: npx cap sync ios
+
+    - name: Install Pods
+      shell: bash
+      working-directory: frontend/ios/App
+      run: pod install
+
+    - name: Import signing certificate
+      uses: apple-actions/import-codesign-certs@v2
+      with:
+        p12-file-base64: ${{ inputs.ios_p12_base64 }}
+        p12-password: ${{ inputs.ios_p12_password }}
+
+    - name: Archive
+      shell: bash
+      working-directory: frontend/ios/App
+      run: |
+        xcodebuild \
+          -workspace App.xcworkspace \
+          -scheme App \
+          -configuration Release \
+          -archivePath $RUNNER_TEMP/App.xcarchive \
+          archive \
+          CODE_SIGN_IDENTITY="${{ inputs.ios_code_sign_identity }}" \
+          PROVISIONING_PROFILE_SPECIFIER="${{ inputs.ios_provisioning_profile }}"
+
+    - name: Export IPA
+      shell: bash
+      run: |
+        xcodebuild \
+          -exportArchive \
+          -archivePath $RUNNER_TEMP/App.xcarchive \
+          -exportOptionsPlist frontend/ios/ExportOptions.plist \
+          -exportPath $RUNNER_TEMP/ipa
+
+    - name: Distribute to Firebase App Distribution
+      uses: wzieba/Firebase-Distribution-Github-Action@v1
+      with:
+        appId: ${{ inputs.firebase_ios_app_id }}
+        serviceCredentialsFileContent: ${{ inputs.firebase_service_account_json }}
+        groups: testers
+        releaseNotes: "Finance OS iOS — branch: ${{ inputs.branch_name }}"
+        file: ${{ runner.temp }}/ipa/App.ipa
