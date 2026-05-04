@@ -1,0 +1,74 @@
+name: n8n Interactive Session (ngrok)
+
+on:
+  workflow_dispatch:
+    inputs:
+      session_duration_hours:
+        description: "Duration (hours) to keep the ngrok session alive."
+        required: true
+        default: "1"
+        type: choice
+        options:
+          - "1"
+          - "2"
+          - "3"
+          - "4"
+          - "5"
+          - "6"
+
+env:
+  N8N_PORT: 5678
+
+jobs:
+  run_n8n:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Pull and Run n8n
+        env:
+          N8N_BASIC_AUTH_ACTIVE: "true"
+          N8N_BASIC_AUTH_USER: ${{ secrets.N8N_BASIC_AUTH_USER }}
+          N8N_BASIC_AUTH_PASSWORD: ${{ secrets.N8N_BASIC_AUTH_PASSWORD }}
+        run: |
+          docker run -d \
+            --name n8n \
+            -p ${{ env.N8N_PORT }}:5678 \
+            -e N8N_BASIC_AUTH_ACTIVE="${N8N_BASIC_AUTH_ACTIVE}" \
+            -e N8N_BASIC_AUTH_USER="${N8N_BASIC_AUTH_USER}" \
+            -e N8N_BASIC_AUTH_PASSWORD="${N8N_BASIC_AUTH_PASSWORD}" \
+            -e N8N_SECURE_COOKIE=false \
+            -v n8n_data:/home/node/.n8n \
+            n8nio/n8n:latest
+
+      - name: Wait for n8n to Start
+        run: sleep 30
+
+      - name: Start ngrok Tunnel
+        id: ngrok
+        uses: ./.github/actions/ngrok-tunnel
+        with:
+          port: ${{ env.N8N_PORT }}
+          ngrok_token: ${{ secrets.NGROK_AUTH_TOKEN }}
+
+      - name: Print Access URL and Hold Session
+        run: |
+          SECONDS_TO_SLEEP=$(( ${{ github.event.inputs.session_duration_hours }} * 3600 ))
+
+          echo "=========================================================="
+          echo " n8n is now accessible via ngrok"
+          echo " Public URL: ${{ steps.ngrok.outputs.ngrok_url }}"
+          echo " ---------------------------------------------------------"
+          echo " The runner will stay alive for ${SECONDS_TO_SLEEP} seconds."
+          echo " Stop the workflow manually when done, or it will timeout."
+          echo "=========================================================="
+
+          sleep $SECONDS_TO_SLEEP
+
+      - name: Stop n8n Container (Cleanup)
+        if: always()
+        run: docker stop n8n && docker rm n8n || true

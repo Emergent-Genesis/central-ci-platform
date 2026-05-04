@@ -1,32 +1,5 @@
 name: finance-os | Deploy Mobile (Android / iOS)
 
-# Builds the Angular + Ionic + Capacitor app for Android and/or iOS,
-# signs the output, and distributes via Firebase App Distribution (no artifact uploads).
-#
-# Required secrets (central-ci-platform repo → Settings → Secrets):
-#   Standard Finance OS:
-#     TOKEN_GITHUB                  — PAT to checkout private repo
-#     PRIVATE_REPO_PATH             — owner/finance-os
-#     API_URL                       — Render.com backend URL
-#     FIREBASE_API_KEY              — Firebase Web API Key
-#     FIREBASE_AUTH_DOMAIN          — e.g. ifinancial-os.firebaseapp.com
-#     FIREBASE_PROJECT_ID           — ifinancial-os
-#     FIREBASE_APP_ID               — Firebase Web App ID
-#     FIREBASE_MEASUREMENT_ID       — GA4 Measurement ID
-#     FIREBASE_SERVICE_ACCOUNT_JSON — raw JSON (used by Firebase App Distribution)
-#   Android:
-#     ANDROID_SIGNING_KEY_BASE64    — base64-encoded .jks keystore
-#     ANDROID_KEY_ALIAS             — key alias
-#     ANDROID_KEYSTORE_PASSWORD     — keystore password
-#     ANDROID_KEY_PASSWORD          — key password
-#     FIREBASE_ANDROID_APP_ID       — Firebase Android App ID (1:xxx:android:yyy)
-#   iOS:
-#     IOS_P12_BASE64                — base64-encoded .p12 distribution certificate
-#     IOS_P12_PASSWORD              — P12 password
-#     IOS_CODE_SIGN_IDENTITY        — e.g. "Apple Distribution: Name (TEAM_ID)"
-#     IOS_PROVISIONING_PROFILE      — provisioning profile name
-#     FIREBASE_IOS_APP_ID           — Firebase iOS App ID (1:xxx:ios:yyy)
-
 on:
   workflow_dispatch:
     inputs:
@@ -45,7 +18,6 @@ on:
           - both
 
 jobs:
-  # ─── Android ──────────────────────────────────────────────────────────────
   android:
     if: ${{ inputs.platform == 'android' || inputs.platform == 'both' }}
     runs-on: ubuntu-latest
@@ -76,7 +48,6 @@ jobs:
           firebase_service_account_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
           branch_name:                ${{ inputs.branch || 'Master' }}
 
-  # ─── iOS ──────────────────────────────────────────────────────────────────
   ios:
     if: ${{ inputs.platform == 'ios' || inputs.platform == 'both' }}
     runs-on: macos-latest

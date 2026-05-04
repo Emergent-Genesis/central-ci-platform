@@ -10,7 +10,6 @@ on:
         type: choice
         options:
           - "basic"
-          - "fhdr"
           - "video-model"
 
 jobs:

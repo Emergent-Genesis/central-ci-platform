@@ -1,10 +1,5 @@
 name: Build Ollama Image (GHCR)
 
-# Builds a Docker image with Ollama + model weights pre-baked.
-# Run this once (and again whenever you want to update the model).
-# Image is pushed to ghcr.io/<owner>/ollama-<model>:latest
-# and used by both finance-os-monthly-analysis.yml and run-ollama.yml.
-
 on:
   workflow_dispatch:
     inputs:
@@ -21,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write    # required to push to GHCR
+      packages: write
 
     steps:
       - name: Free up disk space

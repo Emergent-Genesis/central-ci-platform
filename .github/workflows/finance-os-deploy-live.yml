@@ -1,8 +1,5 @@
 name: finance-os | Deploy (Firebase Hosting — Live)
 
-# Deploys the Angular + Ionic app to Firebase Hosting (web — live channel).
-# For Android and iOS builds, use finance-os-deploy-mobile.yml.
-
 on:
   workflow_dispatch:
     inputs:
@@ -29,14 +26,12 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: ./package-lock.json
 
       - name: Install dependencies
-        working-directory: frontend
         run: npm ci
 
       - name: Inject environment variables
-        working-directory: frontend
         env:
           API_URL:                 ${{ secrets.API_URL }}
           FIREBASE_API_KEY:        ${{ secrets.FIREBASE_API_KEY }}
@@ -55,7 +50,6 @@ jobs:
             src/environments/environment.prod.ts
 
       - name: Build Angular app (production)
-        working-directory: frontend
         run: npm run build:prod
 
       - name: Deploy to Firebase Hosting (live channel)
@@ -65,5 +59,3 @@ jobs:
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
           channelId: live
           projectId: ${{ secrets.FIREBASE_PROJECT_ID }}
-          target: finance-os-frontend
-          entryPoint: .
