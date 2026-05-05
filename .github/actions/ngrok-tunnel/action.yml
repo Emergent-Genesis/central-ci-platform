@@ -1,5 +1,5 @@
 name: "Ngrok Tunnel Setup"
-description: "Sets up, authenticates, and starts an ngrok HTTP tunnel, then retrieves the public URL"
+description: "Installs, authenticates, and starts an ngrok HTTP tunnel, prints the URL, and holds the session"
 branding:
   icon: "globe"
   color: "blue"
@@ -11,6 +11,14 @@ inputs:
   ngrok_token:
     description: "Your ngrok authorization token"
     required: true
+  service_name:
+    description: "Display name of the service being tunnelled (used in log output and annotations)"
+    required: false
+    default: "Service"
+  session_duration_hours:
+    description: "Hours to hold the session open after the tunnel is ready. Set to '0' to skip sleep."
+    required: false
+    default: "0"
 
 outputs:
   ngrok_url:
@@ -20,47 +28,50 @@ outputs:
 runs:
   using: "composite"
   steps:
-    - name: Install Ngrok Dependencies
+    - name: Cache ngrok binary
+      id: cache-ngrok
+      uses: actions/cache@v4
+      with:
+        path: ngrok
+        key: ngrok-v3-linux-amd64
+
+    - name: Ensure jq is available
+      shell: bash
+      run: which jq || sudo apt-get install -y jq
+
+    - name: Download ngrok
+      if: steps.cache-ngrok.outputs.cache-hit != 'true'
       shell: bash
       run: |
-        sudo apt-get update && sudo apt-get install -y wget unzip jq
-
-    - name: Download and Authenticate Ngrok
-      shell: bash
-      run: |
-        # Download the ngrok V3 client
-        NGROK_V3_URL="https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.zip"
-        wget ${NGROK_V3_URL} -O ngrok.zip
-        unzip ngrok.zip
-
+        curl --fail --silent --show-error --location \
+          --connect-timeout 30 --max-time 120 \
+          --retry 3 --retry-delay 10 \
+          "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.zip" \
+          -o ngrok.zip
+        unzip -o ngrok.zip
         chmod +x ngrok
-        ./ngrok config add-authtoken ${{ inputs.ngrok_token }}
+
+    - name: Authenticate ngrok
+      shell: bash
+      run: ./ngrok config add-authtoken ${{ inputs.ngrok_token }}
 
     - name: Start Ngrok Tunnel and Poll for URL
       id: get-url
       shell: bash
       run: |
-        COMFYUI_PORT=${{ inputs.port }}
+        PORT=${{ inputs.port }}
+        echo "Starting ngrok tunnel for ${{ inputs.service_name }} on port $PORT..."
+        ./ngrok http $PORT --log stdout > ngrok.log &
 
-        echo "Starting ngrok tunnel for port $COMFYUI_PORT..."
-        ./ngrok http $COMFYUI_PORT --log stdout > ngrok.log &
-
-        # Polling Loop for Robust URL Retrieval
         NGROK_URL=""
         MAX_RETRIES=20
         RETRY_COUNT=0
 
         while [ -z "$NGROK_URL" ] && [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-          echo "Waiting for ngrok tunnel... (Retry: $((RETRY_COUNT + 1)))"
+          echo "Waiting for ngrok tunnel... ($((RETRY_COUNT + 1))/$MAX_RETRIES)"
           sleep 3
-          
-          # Attempt to pull the URL from the local ngrok API
           NGROK_URL=$(curl -s http://127.0.0.1:4040/api/tunnels | jq -r '.tunnels[0].public_url' 2>/dev/null)
-          
-          if [[ "$NGROK_URL" == "null" || -z "$NGROK_URL" ]]; then
-            NGROK_URL=""
-          fi
-
+          [[ "$NGROK_URL" == "null" || -z "$NGROK_URL" ]] && NGROK_URL=""
           RETRY_COUNT=$((RETRY_COUNT + 1))
         done
 
@@ -71,4 +82,26 @@ runs:
         fi
 
         echo "NGROK_URL=$NGROK_URL" >> $GITHUB_OUTPUT
-        echo "::notice title= ComfyUI Access URL::Access ComfyUI at: $NGROK_URL"
+        echo "::notice title=${{ inputs.service_name }} Access URL::Access ${{ inputs.service_name }} at: $NGROK_URL"
+
+    - name: Print Access URL and Hold Session
+      shell: bash
+      run: |
+        NGROK_URL="${{ steps.get-url.outputs.NGROK_URL }}"
+        SESSION_HOURS="${{ inputs.session_duration_hours }}"
+
+        echo "=========================================================="
+        echo " ${{ inputs.service_name }} is now accessible via ngrok"
+        echo " Public URL: $NGROK_URL"
+        echo " ---------------------------------------------------------"
+
+        if [ "$SESSION_HOURS" != "0" ]; then
+          SECONDS_TO_SLEEP=$(( SESSION_HOURS * 3600 ))
+          echo " The runner will stay alive for ${SECONDS_TO_SLEEP} seconds."
+          echo " Stop the workflow manually when done, or it will timeout."
+          echo "=========================================================="
+          sleep $SECONDS_TO_SLEEP
+        else
+          echo " session_duration_hours is 0 — not sleeping."
+          echo "=========================================================="
+        fi

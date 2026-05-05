@@ -54,20 +54,8 @@ jobs:
         with:
           port: ${{ env.N8N_PORT }}
           ngrok_token: ${{ secrets.NGROK_AUTH_TOKEN }}
-
-      - name: Print Access URL and Hold Session
-        run: |
-          SECONDS_TO_SLEEP=$(( ${{ github.event.inputs.session_duration_hours }} * 3600 ))
-
-          echo "=========================================================="
-          echo " n8n is now accessible via ngrok"
-          echo " Public URL: ${{ steps.ngrok.outputs.ngrok_url }}"
-          echo " ---------------------------------------------------------"
-          echo " The runner will stay alive for ${SECONDS_TO_SLEEP} seconds."
-          echo " Stop the workflow manually when done, or it will timeout."
-          echo "=========================================================="
-
-          sleep $SECONDS_TO_SLEEP
+          service_name: n8n
+          session_duration_hours: ${{ github.event.inputs.session_duration_hours }}
 
       - name: Stop n8n Container (Cleanup)
         if: always()

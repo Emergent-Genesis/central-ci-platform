@@ -1,4 +1,4 @@
-name: finance-os | Backup Sync
+name: finance-os | Sync Backup
 
 on:
   workflow_dispatch:
