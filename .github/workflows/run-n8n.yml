@@ -22,6 +22,7 @@ env:
 jobs:
   run_n8n:
     runs-on: ubuntu-latest
+    timeout-minutes: 390
     permissions:
       contents: read
 
@@ -43,7 +44,7 @@ jobs:
             -e N8N_BASIC_AUTH_PASSWORD="${N8N_BASIC_AUTH_PASSWORD}" \
             -e N8N_SECURE_COOKIE=false \
             -v n8n_data:/home/node/.n8n \
-            n8nio/n8n:latest
+            n8nio/n8n:2.22.5
 
       - name: Wait for n8n to Start
         run: sleep 30

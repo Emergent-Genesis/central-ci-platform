@@ -23,7 +23,7 @@ runs:
   using: "composite"
   steps:
     - name: Log in to GHCR
-      uses: docker/login-action@v3
+      uses: docker/login-action@v3  # v3
       with:
         registry: ghcr.io
         username: ${{ github.actor }}
@@ -38,9 +38,19 @@ runs:
         docker pull "$IMAGE"
         docker run -d --name ollama -p ${{ inputs.port }}:11434 "$IMAGE"
         echo "Waiting for Ollama API ..."
+        healthy=false
         for i in $(seq 1 12); do
-          curl -s "http://localhost:${{ inputs.port }}/api/tags" && echo "" && break
+          if curl -sf "http://localhost:${{ inputs.port }}/api/tags" > /dev/null 2>&1; then
+            echo "  Ollama API healthy on attempt $i"
+            healthy=true
+            break
+          fi
           echo "  attempt $i / 12 — sleeping 5s"
           sleep 5
         done
+        if [ "$healthy" != "true" ]; then
+          echo "FATAL: Ollama API did not become healthy after 60s"
+          docker logs ollama || true
+          exit 1
+        fi
         echo "ollama_url=http://localhost:${{ inputs.port }}" >> "$GITHUB_OUTPUT"

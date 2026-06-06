@@ -1,0 +1,163 @@
+name: "Multi-Project Deploy"
+
+on:
+  workflow_dispatch:
+    inputs:
+      project:
+        description: "Select project to deploy"
+        type: choice
+        required: true
+        options:
+          - astroaugur
+          - finance-os
+          - family-tree
+
+      deploy:
+        description: "Select deployment target"
+        type: choice
+        required: true
+        options:
+          - web
+          - android
+          - ios
+          - all
+
+      deploy_channel:
+        description: "Deployment channel (preview or production)"
+        type: choice
+        required: false
+        default: "production"
+        options:
+          - preview
+          - production
+
+      tester_groups:
+        description: "Firebase tester groups (comma-separated)"
+        type: string
+        required: false
+        default: "qa-team"
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: "🔍 Prepare"
+    uses: ./.github/workflows/prepare-deployment.yml
+    with:
+      project: ${{ github.event.inputs.project }}
+      deploy_target: ${{ github.event.inputs.deploy }}
+      deploy_channel: ${{ github.event.inputs.deploy_channel }}
+
+  deploy-web:
+    name: "🌐 Web"
+    needs: prepare
+    if: contains(fromJson('["web", "all"]'), github.event.inputs.deploy)
+    runs-on: ubuntu-latest
+    environment: ${{ needs.prepare.outputs.environment }}
+
+    steps:
+      - name: Checkout central-ci-platform (for actions)
+        uses: actions/checkout@v4
+
+      - name: Checkout project repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.prepare.outputs.repo }}
+          token: ${{ secrets.GH_TOKEN }}
+          path: project-source
+
+      - name: Build Web App
+        uses: ./.github/actions/build-web
+        with:
+          working_directory: project-source
+          build_command: ${{ github.event.inputs.project == 'family-tree' && 'npm run build' || 'npm run build:prod' }}
+          firebase_service_account: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          deploy_channel: ${{ github.event.inputs.deploy_channel }}
+          channel_id: preview-${{ github.ref_name }}-${{ github.run_number }}
+          admin_code: ${{ github.event.inputs.project == 'family-tree' && secrets.NEXT_PUBLIC_ADMIN_CODE || '' }}
+
+  deploy-android:
+    name: "🤖 Android"
+    needs: prepare
+    if: contains(fromJson('["android", "all"]'), github.event.inputs.deploy)
+    runs-on: ubuntu-latest
+    environment: ${{ needs.prepare.outputs.environment }}
+
+    steps:
+      - name: Checkout central-ci-platform (for actions)
+        uses: actions/checkout@v4
+
+      - name: Checkout project repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.prepare.outputs.repo }}
+          token: ${{ secrets.GH_TOKEN }}
+          path: project-source
+
+      - name: Build Android app
+        uses: ./.github/actions/build-android
+        with:
+          api_url: ${{ secrets.API_URL }}
+          firebase_service_account_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          android_app_id: ${{ secrets.FIREBASE_ANDROID_APP_ID }}
+          ios_app_id: ${{ secrets.FIREBASE_IOS_APP_ID }}
+          measurement_id: ${{ secrets.FIREBASE_MEASUREMENT_ID }}
+          android_signing_key_base64: ${{ secrets.ANDROID_SIGNING_KEY_BASE64 }}
+          android_key_alias: ${{ secrets.ANDROID_KEY_ALIAS }}
+          android_keystore_password: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          android_key_password: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          tester_groups: ${{ github.event.inputs.tester_groups }}
+          frontend_directory: project-source
+
+  deploy-ios:
+    name: "🍎 iOS"
+    needs: prepare
+    if: contains(fromJson('["ios", "all"]'), github.event.inputs.deploy)
+    runs-on: macos-latest
+    environment: ${{ needs.prepare.outputs.environment }}
+
+    steps:
+      - name: Checkout central-ci-platform (for actions)
+        uses: actions/checkout@v4
+
+      - name: Checkout project repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.prepare.outputs.repo }}
+          token: ${{ secrets.GH_TOKEN }}
+          path: project-source
+
+      - name: Build iOS app
+        uses: ./.github/actions/build-ios
+        with:
+          api_url: ${{ secrets.API_URL }}
+          firebase_service_account_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          android_app_id: ${{ secrets.FIREBASE_ANDROID_APP_ID }}
+          ios_app_id: ${{ secrets.FIREBASE_IOS_APP_ID }}
+          measurement_id: ${{ secrets.FIREBASE_MEASUREMENT_ID }}
+          ios_p12_base64: ${{ secrets.IOS_P12_BASE64 }}
+          ios_p12_password: ${{ secrets.IOS_P12_PASSWORD }}
+          ios_code_sign_identity: ${{ secrets.IOS_CODE_SIGN_IDENTITY }}
+          ios_provisioning_profile: ${{ secrets.IOS_PROVISIONING_PROFILE }}
+          tester_groups: ${{ github.event.inputs.tester_groups }}
+          frontend_directory: project-source
+          export_options_plist: project-source/ios/ExportOptions.plist
+
+  summary:
+    name: "✅ Complete"
+    needs: [prepare, deploy-web, deploy-android, deploy-ios]
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Print summary
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "✅ Deployment Summary"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Project : ${{ github.event.inputs.project }}"
+          echo "Web     : ${{ needs.deploy-web.result }}"
+          echo "Android : ${{ needs.deploy-android.result }}"
+          echo "iOS     : ${{ needs.deploy-ios.result }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

@@ -1,11 +1,27 @@
-name: ComfyUI Interactive Session (ngrok)
+name: ComfyUI Interactive Session
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Starts a ComfyUI container and exposes it via an ngrok tunnel.
+#
+# Two launch modes are supported:
+#
+#   Docker Compose (default)
+#     Pulls a pre-built image from GHCR using the chosen model profile.
+#     Build profiles first with the "ComfyUI Docker Build" workflow.
+#
+#   Direct image tag
+#     Specify an exact GHCR image tag (commit SHA or custom tag) to run a
+#     pinned image without docker compose.  Useful for reproducing a known-
+#     good session or rolling back after a broken build.
+# ─────────────────────────────────────────────────────────────────────────────
 
 on:
   workflow_dispatch:
     inputs:
       model_profile:
-        description: "Select the model profile to run (must be pre-built via comfyui-docker.yml)."
-        required: true
+        description: >
+          Model profile (docker compose mode). Ignored when image_tag is set.
+        required: false
         default: "basic"
         type: choice
         options:
@@ -13,8 +29,17 @@ on:
           - "fhdr"
           - "video-model"
 
+      image_tag:
+        description: >
+          [Optional] Exact GHCR image tag to run (e.g. a commit SHA or
+          'latest'). When supplied, skips docker compose and runs the image
+          directly. Leave blank to use docker compose with the model profile.
+        required: false
+        default: ""
+        type: string
+
       session_duration_hours:
-        description: "Duration (hours) to keep the ngrok session alive."
+        description: "Duration (hours) to keep the ngrok session alive (1–6)"
         required: true
         default: "1"
         type: choice
@@ -32,6 +57,7 @@ env:
 jobs:
   run_comfyui:
     runs-on: ubuntu-latest
+    timeout-minutes: 390
     permissions:
       contents: read
       packages: read
@@ -52,24 +78,40 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Checkout Code and Docker Compose File
+      - name: Checkout repository (required for composite actions & compose file)
         uses: actions/checkout@v4
 
-      - name: Pull and Run Selected Model with Docker Compose
+      # ── Launch: docker compose (default) ─────────────────────────────────
+      - name: Pull and run container via Docker Compose
+        if: github.event.inputs.image_tag == ''
         env:
           COMPOSE_PROJECT_NAME: ${{ github.event.repository.name }}
-          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
         shell: bash
         run: |
-          MODEL_PROFILE=${{ inputs.model_profile }}
+          MODEL_PROFILE="${{ inputs.model_profile }}"
+          echo "▶  Launching ComfyUI with profile: $MODEL_PROFILE"
+          docker compose --profile "$MODEL_PROFILE" pull
+          docker compose --profile "$MODEL_PROFILE" up -d
 
-          echo "--- Pulling and running container for profile: $MODEL_PROFILE ---"
-          docker compose --profile $MODEL_PROFILE pull 
-          docker compose --profile $MODEL_PROFILE up -d
+      # ── Launch: direct image tag ─────────────────────────────────────────
+      - name: Pull and run pinned image directly
+        if: github.event.inputs.image_tag != ''
+        shell: bash
+        run: |
+          IMAGE="ghcr.io/${{ github.repository }}:${{ inputs.image_tag }}"
+          echo "▶  Launching ComfyUI from pinned image: $IMAGE"
+          docker pull "$IMAGE"
+          docker run -d \
+            --name comfyui \
+            -p "${COMFYUI_PORT}:${COMFYUI_PORT}" \
+            "$IMAGE"
 
-      - name: Wait for ComfyUI to Start Up
-        run: sleep 120
+      - name: Wait for ComfyUI to initialise
+        run: |
+          echo "Waiting 120 s for ComfyUI to start …"
+          sleep 120
 
+      # ── Expose via ngrok ─────────────────────────────────────────────────
       - name: Start ngrok Tunnel
         id: ngrok
         uses: ./.github/actions/ngrok-tunnel
@@ -79,8 +121,15 @@ jobs:
           service_name: ComfyUI
           session_duration_hours: ${{ github.event.inputs.session_duration_hours }}
 
-      - name: Docker Compose Down (Cleanup)
+      # ── Cleanup ───────────────────────────────────────────────────────────
+      - name: Teardown containers
         if: always()
-        env:
-          COMPOSE_PROJECT_NAME: ${{ github.repository }}
-        run: docker compose down
+        shell: bash
+        run: |
+          if [[ -n "${{ inputs.image_tag }}" ]]; then
+            docker stop comfyui || true
+            docker rm   comfyui || true
+          else
+            COMPOSE_PROJECT_NAME="${{ github.event.repository.name }}" \
+              docker compose down
+          fi

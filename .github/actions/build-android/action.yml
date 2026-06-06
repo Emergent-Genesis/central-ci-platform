@@ -1,117 +1,182 @@
-name: "Build Android (Finance OS)"
-description: "Builds the Finance OS Angular app, signs the APK, and distributes via Firebase App Distribution. Code must be checked out by the calling workflow before this action runs."
+name: "Build Android"
+description: "Build, sign, and distribute an Android APK via Firebase App Distribution. Auto-generates a keystore if signing secrets are absent. See README for setup."
 branding:
   icon: "smartphone"
   color: "green"
 
 inputs:
   api_url:
-    description: "Backend API URL (injected into environment.prod.ts)"
+    description: "Backend API URL"
     required: true
-  firebase_api_key:
-    description: "Firebase Web API Key"
+  firebase_service_account_json:
+    description: "Firebase service account JSON (standard IAM credentials — see README)"
     required: true
-  firebase_auth_domain:
-    description: "Firebase Auth Domain"
-    required: true
-  firebase_project_id:
-    description: "Firebase Project ID"
-    required: true
-  firebase_app_id:
-    description: "Firebase Web App ID"
-    required: true
-  firebase_measurement_id:
-    description: "Firebase Measurement ID (GA4)"
+  android_app_id:
+    description: "Firebase Android app ID (from Firebase console → Project Settings → Your apps)"
+    required: false
+    default: ""
+  ios_app_id:
+    description: "Firebase iOS app ID"
+    required: false
+    default: ""
+  measurement_id:
+    description: "Firebase GA4 measurement ID (optional)"
     required: false
     default: ""
   android_signing_key_base64:
-    description: "Base64-encoded .jks keystore file"
-    required: true
-  android_key_alias:
-    description: "Key alias inside the keystore"
-    required: true
-  android_keystore_password:
-    description: "Keystore password"
-    required: true
-  android_key_password:
-    description: "Key password"
-    required: true
-  firebase_android_app_id:
-    description: "Firebase Android App ID for App Distribution (format: 1:xxx:android:yyy)"
-    required: true
-  firebase_service_account_json:
-    description: "Firebase service account JSON (raw JSON, not base64 — same secret used for Firebase Hosting deploy)"
-    required: true
-  branch_name:
-    description: "Branch name used in release notes"
+    description: "Base64-encoded .jks keystore. Leave empty to auto-generate (see scripts/generate-android-keystore.sh)."
     required: false
-    default: "Master"
+    default: ""
+  android_key_alias:
+    description: "Key alias. Auto-set to 'ci-key' when empty."
+    required: false
+    default: ""
+  android_keystore_password:
+    description: "Keystore password. Auto-generated when empty."
+    required: false
+    default: ""
+  android_key_password:
+    description: "Key password. Auto-generated when empty."
+    required: false
+    default: ""
+  tester_groups:
+    description: "Firebase tester groups (comma-separated)"
+    required: false
+    default: "testers"
+  frontend_directory:
+    description: "Relative path to the frontend directory"
+    required: false
+    default: "frontend"
 
 runs:
   using: "composite"
   steps:
-    - uses: actions/setup-node@v4
+    - name: Extract Firebase config
+      id: firebase
+      uses: ./.github/actions/firebase-config
+      with:
+        service_account_json: ${{ inputs.firebase_service_account_json }}
+        android_app_id: ${{ inputs.android_app_id }}
+        ios_app_id: ${{ inputs.ios_app_id }}
+        measurement_id: ${{ inputs.measurement_id }}
+
+    - uses: actions/setup-node@v4  # v4
       with:
         node-version: '22'
         cache: npm
-        cache-dependency-path: frontend/package-lock.json
+        cache-dependency-path: ${{ inputs.frontend_directory }}/**/package-lock.json
 
-    - uses: actions/setup-java@v4
+    - uses: actions/setup-java@v4  # v4
       with:
         java-version: '17'
         distribution: temurin
 
     - name: Setup Android SDK
-      uses: android-actions/setup-android@v3
+      uses: android-actions/setup-android@v3  # v3
 
-    - name: Install Node dependencies
+    - name: Install dependencies
       shell: bash
-      working-directory: frontend
+      working-directory: ${{ inputs.frontend_directory }}
       run: npm ci
 
-    - name: Inject production environment
+    - name: Inject environment
       shell: bash
-      working-directory: frontend
+      working-directory: ${{ inputs.frontend_directory }}
+      env:
+        API_URL: ${{ inputs.api_url }}
+        FIREBASE_API_KEY: ${{ steps.firebase.outputs.api_key }}
+        FIREBASE_AUTH_DOMAIN: ${{ steps.firebase.outputs.auth_domain }}
+        FIREBASE_PROJECT_ID: ${{ steps.firebase.outputs.project_id }}
+        FIREBASE_APP_ID: ${{ steps.firebase.outputs.app_id }}
+        FIREBASE_MEASUREMENT_ID: ${{ steps.firebase.outputs.measurement_id }}
       run: |
-        sed -i \
-          -e "s|%%API_URL%%|${{ inputs.api_url }}|g" \
-          -e "s|%%FIREBASE_API_KEY%%|${{ inputs.firebase_api_key }}|g" \
-          -e "s|%%FIREBASE_AUTH_DOMAIN%%|${{ inputs.firebase_auth_domain }}|g" \
-          -e "s|%%FIREBASE_PROJECT_ID%%|${{ inputs.firebase_project_id }}|g" \
-          -e "s|%%FIREBASE_APP_ID%%|${{ inputs.firebase_app_id }}|g" \
-          -e "s|%%FIREBASE_MEASUREMENT_ID%%|${{ inputs.firebase_measurement_id }}|g" \
-          src/environments/environment.prod.ts
+        python3 - <<'PYEOF'
+        import os, pathlib
+        f = pathlib.Path("src/environments/environment.prod.ts")
+        c = f.read_text()
+        for k, v in {
+          "%%API_URL%%":                 os.environ["API_URL"],
+          "%%FIREBASE_API_KEY%%":        os.environ["FIREBASE_API_KEY"],
+          "%%FIREBASE_AUTH_DOMAIN%%":    os.environ["FIREBASE_AUTH_DOMAIN"],
+          "%%FIREBASE_PROJECT_ID%%":     os.environ["FIREBASE_PROJECT_ID"],
+          "%%FIREBASE_APP_ID%%":         os.environ["FIREBASE_APP_ID"],
+          "%%FIREBASE_MEASUREMENT_ID%%": os.environ["FIREBASE_MEASUREMENT_ID"],
+        }.items():
+            c = c.replace(k, v)
+        f.write_text(c)
+        PYEOF
 
-    - name: Build Angular (production)
+    - name: Build Angular
       shell: bash
-      working-directory: frontend
+      working-directory: ${{ inputs.frontend_directory }}
       run: npm run build:prod
 
-    - name: Capacitor sync Android
+    - name: Capacitor sync
       shell: bash
-      working-directory: frontend
+      working-directory: ${{ inputs.frontend_directory }}
       run: npx cap sync android
 
     - name: Build release APK
       shell: bash
-      working-directory: frontend/android
+      working-directory: ${{ inputs.frontend_directory }}/android
       run: ./gradlew assembleRelease
 
-    - name: Sign APK
+    - name: Resolve signing credentials and sign APK
       id: sign
-      uses: r0adkll/sign-android-release@v1
-      with:
-        releaseDirectory: frontend/android/app/build/outputs/apk/release
-        signingKeyBase64: ${{ inputs.android_signing_key_base64 }}
-        alias: ${{ inputs.android_key_alias }}
-        keyStorePassword: ${{ inputs.android_keystore_password }}
-        keyPassword: ${{ inputs.android_key_password }}
+      shell: bash
+      env:
+        SIGNING_KEY_B64: ${{ inputs.android_signing_key_base64 }}
+        KEY_ALIAS_IN: ${{ inputs.android_key_alias }}
+        STORE_PASS_IN: ${{ inputs.android_keystore_password }}
+        KEY_PASS_IN: ${{ inputs.android_key_password }}
+        FRONTEND_DIR: ${{ inputs.frontend_directory }}
+      run: |
+        KEYSTORE_PATH="${RUNNER_TEMP}/release.jks"
 
-    - name: Distribute to Firebase App Distribution
-      uses: wzieba/Firebase-Distribution-Github-Action@v1
+        if [[ -n "$SIGNING_KEY_B64" && -n "$KEY_ALIAS_IN" && -n "$STORE_PASS_IN" && -n "$KEY_PASS_IN" ]]; then
+          KEY_ALIAS="$KEY_ALIAS_IN"
+          STORE_PASS="$STORE_PASS_IN"
+          KEY_PASS="$KEY_PASS_IN"
+          echo "$SIGNING_KEY_B64" | base64 --decode > "$KEYSTORE_PATH"
+        else
+          echo "No signing secrets provided — generating a self-signed CI keystore."
+          echo "Run scripts/generate-android-keystore.sh locally to create a reusable one."
+          KEY_ALIAS="${KEY_ALIAS_IN:-ci-key}"
+          STORE_PASS="${STORE_PASS_IN:-$(openssl rand -base64 16)}"
+          KEY_PASS="${KEY_PASS_IN:-$(openssl rand -base64 16)}"
+          keytool -genkeypair -v \
+            -keystore  "$KEYSTORE_PATH" \
+            -alias     "$KEY_ALIAS" \
+            -keyalg    RSA \
+            -keysize   2048 \
+            -validity  3650 \
+            -storepass "$STORE_PASS" \
+            -keypass   "$KEY_PASS" \
+            -dname     "CN=CI Build, OU=CI, O=Organisation, L=Unknown, ST=Unknown, C=US" \
+            -storetype JKS
+        fi
+
+        echo "::add-mask::$STORE_PASS"
+        echo "::add-mask::$KEY_PASS"
+
+        APK_DIR="${FRONTEND_DIR}/android/app/build/outputs/apk/release"
+        UNSIGNED_APK=$(find "$APK_DIR" -name "*-unsigned*.apk" | head -1)
+        SIGNED_APK="${RUNNER_TEMP}/app-release-signed.apk"
+
+        jarsigner -verbose \
+          -sigalg SHA256withRSA -digestalg SHA-256 \
+          -keystore "$KEYSTORE_PATH" \
+          -storepass "$STORE_PASS" \
+          -keypass   "$KEY_PASS" \
+          -signedjar "$SIGNED_APK" \
+          "$UNSIGNED_APK" "$KEY_ALIAS"
+
+        echo "signed_apk=$SIGNED_APK" >> "$GITHUB_OUTPUT"
+
+    - name: Distribute via Firebase App Distribution
+      uses: wzieba/Firebase-Distribution-Github-Action@v1  # v1
       with:
-        appId: ${{ inputs.firebase_android_app_id }}
+        appId: ${{ steps.firebase.outputs.android_app_id }}
         serviceCredentialsFileContent: ${{ inputs.firebase_service_account_json }}
-        groups: testers
-        releaseNotes: "Finance OS Android — branch: ${{ inputs.branch_name }}"
-        file: ${{ steps.sign.outputs.signedReleaseFile }}
+        groups: ${{ inputs.tester_groups }}
+        file: ${{ steps.sign.outputs.signed_apk }}

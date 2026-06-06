@@ -1,0 +1,104 @@
+name: "Prepare Deployment"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# REUSABLE WORKFLOW — Called by deployment workflows to prepare environment
+# Validates project configuration and loads environment settings
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_call:
+    inputs:
+      project:
+        description: "Project name from private repo"
+        type: string
+        required: true
+      deploy_target:
+        description: "Deployment target (web, android, ios, or all)"
+        type: string
+        required: true
+      deploy_channel:
+        description: "Deployment channel (preview or production)"
+        type: string
+        required: false
+        default: "production"
+    outputs:
+      repo:
+        description: "Project repository"
+        value: ${{ jobs.prepare.outputs.repo }}
+      name:
+        description: "Project display name"
+        value: ${{ jobs.prepare.outputs.name }}
+      environment:
+        description: "GitHub environment name"
+        value: ${{ jobs.prepare.outputs.environment }}
+
+jobs:
+  prepare:
+    name: "🔍 Prepare"
+    runs-on: ubuntu-latest
+    outputs:
+      repo: ${{ steps.config.outputs.repo }}
+      name: ${{ steps.config.outputs.name }}
+      environment: ${{ steps.config.outputs.environment }}
+
+    steps:
+      - name: Load project configuration
+        id: config
+        run: |
+          PROJECT="${{ inputs.project }}"
+
+          # Extract owner from current repository
+          REPO_OWNER=$(echo "${{ github.repository }}" | cut -d'/' -f1)
+
+          # Define projects and their display names
+          declare -A PROJECT_NAMES=(
+            [astroaugur]="AstroAugur"
+            [finance-os]="Finance OS"
+            [family-tree]="Family Tree"
+          )
+
+          # Validate and output project configuration
+          if [[ ! ${PROJECT_NAMES[$PROJECT]+_} ]]; then
+            echo "❌ Unknown project: $PROJECT"
+            exit 1
+          fi
+
+          echo "repo=${REPO_OWNER}/${PROJECT}" >> $GITHUB_OUTPUT
+          echo "name=${PROJECT_NAMES[$PROJECT]}" >> $GITHUB_OUTPUT
+          echo "environment=${PROJECT}" >> $GITHUB_OUTPUT
+
+      - name: Validate deployment target
+        run: |
+          target="${{ inputs.deploy_target }}"
+          channel="${{ inputs.deploy_channel }}"
+
+          case "$target" in
+            web|android|ios|all)
+              echo "✅ Valid target: $target"
+              ;;
+            *)
+              echo "❌ Invalid target: $target (must be web, android, ios, or all)"
+              exit 1
+              ;;
+          esac
+
+          case "$channel" in
+            preview|production)
+              echo "✅ Valid channel: $channel"
+              ;;
+            *)
+              echo "❌ Invalid channel: $channel (must be preview or production)"
+              exit 1
+              ;;
+          esac
+
+      - name: Summary
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📦 Deployment Prepared"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Project: ${{ inputs.project }} (${{ steps.config.outputs.name }})"
+          echo "Repository: ${{ steps.config.outputs.repo }}"
+          echo "Target: ${{ inputs.deploy_target }}"
+          echo "Channel: ${{ inputs.deploy_channel }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

@@ -1,0 +1,82 @@
+name: "Extract Firebase Config"
+description: "Parses Firebase service account credentials and accepts app-specific IDs as separate inputs. The service_account_json must be a standard Firebase service account (IAM credentials). App IDs (android_app_id, ios_app_id, measurement_id) are separate inputs — do not embed them in the service account JSON."
+branding:
+  icon: "database"
+  color: "yellow"
+
+inputs:
+  service_account_json:
+    description: "Standard Firebase service account JSON (IAM credentials — project_id, private_key, client_email, etc.)"
+    required: true
+  android_app_id:
+    description: "Firebase Android app ID (from Firebase console → Project Settings → Your apps)"
+    required: false
+    default: ""
+  ios_app_id:
+    description: "Firebase iOS app ID (from Firebase console → Project Settings → Your apps)"
+    required: false
+    default: ""
+  measurement_id:
+    description: "Firebase GA4 measurement ID (optional)"
+    required: false
+    default: ""
+
+outputs:
+  project_id:
+    description: "Firebase project ID"
+    value: ${{ steps.parse.outputs.project_id }}
+  api_key:
+    description: "Firebase web API key"
+    value: ${{ steps.parse.outputs.api_key }}
+  auth_domain:
+    description: "Firebase auth domain (derived: {project_id}.firebaseapp.com)"
+    value: ${{ steps.parse.outputs.auth_domain }}
+  app_id:
+    description: "Firebase web app ID"
+    value: ${{ steps.parse.outputs.app_id }}
+  storage_bucket:
+    description: "Firebase storage bucket (web_storage_bucket field, or derived: {project_id}.appspot.com)"
+    value: ${{ steps.parse.outputs.storage_bucket }}
+  messaging_sender_id:
+    description: "Firebase messaging sender ID (web_messaging_sender_id field, optional)"
+    value: ${{ steps.parse.outputs.messaging_sender_id }}
+  measurement_id:
+    description: "Firebase measurement ID (GA4, optional)"
+    value: ${{ steps.parse.outputs.measurement_id }}
+  android_app_id:
+    description: "Firebase Android app ID"
+    value: ${{ steps.parse.outputs.android_app_id }}
+  ios_app_id:
+    description: "Firebase iOS app ID"
+    value: ${{ steps.parse.outputs.ios_app_id }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Parse Firebase config from JSON
+      id: parse
+      shell: bash
+      env:
+        SERVICE_ACCOUNT_JSON: ${{ inputs.service_account_json }}
+      run: |
+        project_id=$(echo "$SERVICE_ACCOUNT_JSON"          | jq -r '.project_id')
+        api_key=$(echo "$SERVICE_ACCOUNT_JSON"             | jq -r '.web_api_key // ""')
+        app_id=$(echo "$SERVICE_ACCOUNT_JSON"              | jq -r '.web_app_id  // ""')
+        messaging_sender_id=$(echo "$SERVICE_ACCOUNT_JSON" | jq -r '.web_messaging_sender_id // ""')
+        storage_bucket=$(echo "$SERVICE_ACCOUNT_JSON"      | jq -r '.web_storage_bucket // ""')
+        auth_domain="${project_id}.firebaseapp.com"
+
+        # Default storage bucket from project_id when not embedded
+        if [ -z "$storage_bucket" ] || [ "$storage_bucket" = "null" ]; then
+          storage_bucket="${project_id}.appspot.com"
+        fi
+
+        echo "project_id=$project_id"                     >> "$GITHUB_OUTPUT"
+        echo "api_key=$api_key"                           >> "$GITHUB_OUTPUT"
+        echo "auth_domain=$auth_domain"                   >> "$GITHUB_OUTPUT"
+        echo "app_id=$app_id"                             >> "$GITHUB_OUTPUT"
+        echo "storage_bucket=$storage_bucket"             >> "$GITHUB_OUTPUT"
+        echo "messaging_sender_id=$messaging_sender_id"   >> "$GITHUB_OUTPUT"
+        echo "measurement_id=${{ inputs.measurement_id }}" >> "$GITHUB_OUTPUT"
+        echo "android_app_id=${{ inputs.android_app_id }}" >> "$GITHUB_OUTPUT"
+        echo "ios_app_id=${{ inputs.ios_app_id }}"         >> "$GITHUB_OUTPUT"

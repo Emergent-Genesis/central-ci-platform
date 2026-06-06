@@ -30,7 +30,7 @@ runs:
   steps:
     - name: Cache ngrok binary
       id: cache-ngrok
-      uses: actions/cache@v4
+      uses: actions/cache@v4  # v4
       with:
         path: ngrok
         key: ngrok-v3-linux-amd64
@@ -53,7 +53,11 @@ runs:
 
     - name: Authenticate ngrok
       shell: bash
-      run: ./ngrok config add-authtoken ${{ inputs.ngrok_token }}
+      env:
+        NGROK_TOKEN: ${{ inputs.ngrok_token }}
+      run: |
+        echo "::add-mask::$NGROK_TOKEN"
+        ./ngrok config add-authtoken "$NGROK_TOKEN"
 
     - name: Start Ngrok Tunnel and Poll for URL
       id: get-url
@@ -81,7 +85,7 @@ runs:
           exit 1
         fi
 
-        echo "NGROK_URL=$NGROK_URL" >> $GITHUB_OUTPUT
+        echo "NGROK_URL=$NGROK_URL" >> "$GITHUB_OUTPUT"
         echo "::notice title=${{ inputs.service_name }} Access URL::Access ${{ inputs.service_name }} at: $NGROK_URL"
 
     - name: Print Access URL and Hold Session

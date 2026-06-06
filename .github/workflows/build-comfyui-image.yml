@@ -50,10 +50,8 @@ jobs:
           COMPOSE_PROJECT_NAME: ${{ github.event.repository.name }}
         shell: bash
         run: |
-          ls -l
-          echo $COMPOSE_PROJECT_NAME
           cd comfyui-source-private
-          MODEL_PROFILE=${{ inputs.model_profile }}
-          echo "--- Building $MODEL_PROFILE Model---"
-          docker compose --profile $MODEL_PROFILE build --push
+          MODEL_PROFILE="${{ inputs.model_profile }}"
+          echo "--- Building $MODEL_PROFILE Model ---"
+          docker compose --profile "$MODEL_PROFILE" build --push
           echo "Successfully built and pushed image for profile: $MODEL_PROFILE"

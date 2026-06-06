@@ -1,144 +1,191 @@
 # Central CI Platform
 
-A single **public** GitHub repository that hosts all GitHub Actions workflows and reusable composite actions for multiple private projects. Running workflows in a public repo gives unlimited free Actions minutes.
+A centralised GitHub Actions hub for building, signing, and deploying multi-platform apps (web, Android, iOS) to Firebase, plus on-demand interactive sessions for ComfyUI and n8n.
 
 ---
 
-## Repository Layout
+## About
 
+This repository contains no application code. It is a collection of reusable composite actions and workflow files that other private project repositories consume. A single workflow dispatch triggers checkout, build, sign, and deploy across web, Android, and iOS targets — all coordinated from one place.
+
+Supported projects are registered in `prepare-deployment.yml`. Each project maps to a GitHub Environment of the same name, isolating its secrets from other projects.
+
+---
+
+## Secrets & Variables
+
+### Repository-level secrets
+
+Set these under **Settings → Secrets and variables → Actions → Repository secrets**.
+
+| Secret | What it is | Where to get it |
+|--------|------------|-----------------|
+| `GH_TOKEN` | Personal Access Token used to checkout private project repos | GitHub → **Settings → Developer settings → Personal access tokens (classic)** → generate with `repo` scope and `read:packages` |
+| `NGROK_AUTH_TOKEN` | Auth token for ngrok tunnels (ComfyUI, n8n sessions) | [dashboard.ngrok.com](https://dashboard.ngrok.com) → **Your Authtoken** |
+
+---
+
+### Environment-level secrets
+
+Create one GitHub Environment per project (`astroaugur`, `finance-os`, `family-tree`) under **Settings → Environments**, then add the secrets below to each.
+
+#### Firebase — service account JSON + app ID secrets
+
+`FIREBASE_SERVICE_ACCOUNT` is a JSON blob containing service account credentials plus web app configuration. **App IDs for Android and iOS are passed as separate secrets**, not in the JSON.
+
+Build the JSON like this:
+
+1. Firebase console → **Project Settings → Service accounts** → **Generate new private key** — download the JSON
+2. Firebase console → **Project Settings → Your apps → (Web app)** → copy the config fields
+3. Merge into one object:
+
+```jsonc
+{
+  // From the downloaded service account JSON (all standard IAM fields)
+  "type": "service_account",
+  "project_id": "my-project-12345",
+  "private_key_id": "...",
+  "private_key": "-----BEGIN RSA PRIVATE KEY-----\n...",
+  "client_email": "firebase-adminsdk-xxx@my-project-12345.iam.gserviceaccount.com",
+  "client_id": "...",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+
+  // Add manually from Firebase console → Project Settings → Your apps → (Web app) → Config
+  "web_api_key":              "AIzaSy...",
+  "web_app_id":               "1:123:web:abc",
+  "web_messaging_sender_id":  "123456789",
+  "web_storage_bucket":       "my-project-12345.appspot.com"
+}
 ```
-central-ci-platform/
-├── .github/
-│   ├── actions/
-│   │   ├── ngrok-tunnel/        — composite: start ngrok, output public URL
-│   │   └── ollama/              — composite: pull Ollama from GHCR, start container
-│   └── workflows/
-│       ├── finance-os-*.yml     — Finance OS scheduled + manual workflows
-│       ├── build-ollama-image.yml
-│       ├── comfyui-docker.yml
-│       ├── run-comfyui.yml
-│       └── run-comfyui-old.yml
-└── docker/
-    └── ollama-mistral/          — Dockerfile: Ollama + mistral:7b-instruct pre-baked
-```
+
+The service account must have the **Firebase App Distribution Admin** role (Firebase console → Project Settings → Service accounts, or Google Cloud IAM).
+
+> `auth_domain` is derived automatically as `{project_id}.firebaseapp.com` — no need to store it.
+
+#### All environment secrets
+
+| Secret | Used by | Where to get it |
+|--------|---------|-----------------|
+| `FIREBASE_SERVICE_ACCOUNT` | Web, Android, iOS | See above |
+| `FIREBASE_ANDROID_APP_ID` | Android | Firebase console → **Project Settings → Your apps → (Android app) → App ID** (format: `1:NNN:android:xxx`) |
+| `FIREBASE_IOS_APP_ID` | iOS | Firebase console → **Project Settings → Your apps → (iOS app) → App ID** (format: `1:NNN:ios:xxx`) |
+| `FIREBASE_MEASUREMENT_ID` | Android, iOS | Firebase console → **Project Settings → Your apps → (Web app) → Measurement ID** (format: `G-XXXXXXXXXX`) |
+| `API_URL` | Android, iOS | Your backend — e.g. `https://api.myapp.com` |
+| `NEXT_PUBLIC_ADMIN_CODE` | Web (family-tree only) | Arbitrary string you define |
+| `ANDROID_SIGNING_KEY_BASE64` | Android | Run `scripts/generate-android-keystore.sh` — output printed at end |
+| `ANDROID_KEY_ALIAS` | Android | Same script output |
+| `ANDROID_KEYSTORE_PASSWORD` | Android | Same script output |
+| `ANDROID_KEY_PASSWORD` | Android | Same script output |
+| `IOS_P12_BASE64` | iOS | Run `scripts/generate-ios-certs.sh p12 …` — output printed at end |
+| `IOS_P12_PASSWORD` | iOS | Same script output |
+| `IOS_CODE_SIGN_IDENTITY` | iOS | Keychain Access → find the imported certificate → copy the full string, e.g. `Apple Distribution: Your Name (ABCDE12345)` |
+| `IOS_PROVISIONING_PROFILE` | iOS | Apple Developer → **Profiles** → download `.mobileprovision` → use the exact profile name |
+
+> **Android signing is optional for personal/testing use.** When none of the `ANDROID_*` secrets are set the build action auto-generates a self-signed keystore. For production builds, generate a persistent one with `scripts/generate-android-keystore.sh`.
+
+> **iOS signing requires an Apple Developer account.** Use `scripts/generate-ios-certs.sh` to generate the CSR and .p12; follow Apple's certificate portal to get the signed distribution certificate.
 
 ---
 
-## Composite Actions
+## Workflows & Required Secrets
 
-Reusable building blocks called from workflows via `uses: ./.github/actions/<name>`.
+### `multi-project-deploy.yml` (main workflow)
 
-### `ngrok-tunnel`
+Dispatches a build and deploy to web, Android, iOS, or all targets. Requires **environment secrets** from one of the three project environments (`astroaugur`, `finance-os`, `family-tree`).
 
-Installs ngrok, authenticates, starts an HTTP tunnel, and outputs the public URL.
+**Inputs:**
+- `project` (required) — which project to deploy: `astroaugur`, `finance-os`, or `family-tree`
+- `deploy` (required) — which target(s): `web`, `android`, `ios`, or `all`
+- `deploy_channel` (optional) — Firebase Hosting channel: `preview` or `production` (default: `production`)
+- `tester_groups` (optional) — comma-separated Firebase App Distribution tester groups (default: `qa-team`)
 
-| Input | Required | Description |
-|---|---|---|
-| `port` | yes | Local port to expose |
-| `ngrok_token` | yes | ngrok auth token |
-
-| Output | Description |
-|---|---|
-| `ngrok_url` | Public HTTPS URL |
-
-### `ollama`
-
-Logs in to GHCR, pulls the pre-baked Ollama Docker image, starts it as a local container, and waits for the API to be ready.
-
-| Input | Default | Description |
-|---|---|---|
-| `model_profile` | `mistral-7b` | Must match an image built via `build-ollama-image.yml` |
-| `port` | `11434` | Port to expose the Ollama API on |
-
-| Output | Description |
-|---|---|
-| `ollama_url` | Base URL, e.g. `http://localhost:11434` |
-
-> Ollama and the calling Python script run on the same Actions runner — no ngrok tunnel needed.
+**Required secrets (all from the project environment):**
+- `FIREBASE_SERVICE_ACCOUNT`
+- `FIREBASE_ANDROID_APP_ID` (if deploying android or all)
+- `FIREBASE_IOS_APP_ID` (if deploying ios or all)
+- `FIREBASE_MEASUREMENT_ID` (if deploying android or ios)
+- `API_URL` (if deploying android or ios)
+- `GH_TOKEN` (repository-level or environment-level)
+- Android signing secrets if deploying android (optional — auto-generated if absent)
+- iOS signing secrets if deploying ios (required)
+- `NEXT_PUBLIC_ADMIN_CODE` (if project is family-tree and deploying web)
 
 ---
 
-## Finance OS Workflows
+### `version-bump-release.yml`
 
-All Finance OS logic runs here. The private `finance-os` repo has **no workflows**.
+Bumps version, tags, and pushes to a project repo.
 
-### Scheduled (cron + manual)
+**Inputs:**
+- `project` (required) — `astroaugur` or `finance-os`
+- `bump_type` (optional) — `major`, `minor`, `patch`, or `build` (default: `patch`)
 
-| Workflow | Cron (IST) | What it does |
-|---|---|---|
-| `finance-os-daily-cache.yml` | 06:00 AM daily | Refreshes market data — stocks, MF NAV, gold/silver, macro rates |
-| `finance-os-monthly-analysis.yml` | 08:00 PM on 1st | Full portfolio refresh → math scoring → Ollama AI analysis → Firestore |
-| `finance-os-monthly-report.yml` | 07:00 AM on 1st | Gemini-generated PDF report → writes to data repo |
-| `finance-os-firestore-cleanup.yml` | 00:30 AM on 1st | Deletes Firestore documents past their 6-month TTL |
-
-### Manual (`workflow_dispatch`)
-
-| Workflow | Input | What it does |
-|---|---|---|
-| `finance-os-deploy-live.yml` | `branch` | Builds Next.js static export → deploys to Firebase live channel |
-| `finance-os-deploy-preview.yml` | `branch` | Builds Next.js static export → deploys Firebase preview URL |
-| `finance-os-backup-sync.yml` | `branch` | Mirrors finance-os repo to backup repo |
-
-### One-time setup
-
-| Workflow | Input | What it does |
-|---|---|---|
-| `build-ollama-image.yml` | `model` (choice) | Builds Ollama + model Docker image → pushes to GHCR. Run once, then update when the model changes. |
-
-**Ollama startup flow:** `build-ollama-image.yml` bakes the model weights into the image at build time. The monthly analysis workflow calls the `ollama` composite action to pull (~30 s) and start the container — no model download at runtime.
+**Required secrets:**
+- `GH_TOKEN` (repository-level)
 
 ---
 
-## ComfyUI Workflows
+### `run-comfyui.yml`
 
-| Workflow | Trigger | What it does |
-|---|---|---|
-| `comfyui-docker.yml` | Manual — `model_profile` | Builds ComfyUI Docker image for the selected profile → pushes to GHCR |
-| `run-comfyui.yml` | Manual — `model_profile`, `session_duration_hours` | Pulls GHCR image → starts ComfyUI → exposes via ngrok tunnel |
+Spawns a ComfyUI session with ngrok tunnel.
 
-**Profiles:** `basic`, `fhdr`, `video-model`
+**Inputs:**
+- `model_profile` (optional) — `basic`, `fhdr`, or `video-model` (default: `basic`)
+- `image_tag` (optional) — ComfyUI Docker image tag (default: latest)
+- `session_duration_hours` (required) — `1`, `2`, `3`, `4`, `5`, or `6`
 
-Run `comfyui-docker.yml` once per profile before using `run-comfyui.yml`.
-
----
-
-## Required Secrets
-
-Set these in **Settings → Secrets → Actions** of this repo.
-
-### Finance OS
-
-| Secret | Description |
-|---|---|
-| `TOKEN_GITHUB` | PAT with `repo` scope — checks out private repos and used as `REPO_ACCESS_TOKEN` by Python |
-| `PRIVATE_REPO_PATH` | `owner/finance-os` |
-| `BACKUP_REPO_PATH` | `owner/finance-os-backup` |
-| `GEMINI_API_KEY` | Google AI Studio key |
-| `FIREBASE_SERVICE_ACCOUNT_JSON` | Base64-encoded Firebase service account JSON |
-| `NEXT_PUBLIC_API_URL` | Render.com backend URL |
-| `NEXT_PUBLIC_FIREBASE_API_KEY` | Firebase Web API Key |
-| `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` | e.g. `your-project.firebaseapp.com` |
-| `NEXT_PUBLIC_FIREBASE_PROJECT_ID` | Firebase project ID |
-| `NEXT_PUBLIC_FIREBASE_APP_ID` | Firebase App ID |
-
-### ComfyUI
-
-| Secret | Description |
-|---|---|
-| `PRIVATE_REPO_PAT` | PAT for `comfyui-source-private` repo |
-
-### Shared
-
-| Secret | Description |
-|---|---|
-| `NGROK_AUTH_TOKEN` | ngrok auth token — used by ComfyUI and any workflow that uses the `ngrok-tunnel` action |
-| `GITHUB_TOKEN` | Auto-injected by GitHub Actions — used for GHCR login (no setup needed) |
+**Required secrets:**
+- `NGROK_AUTH_TOKEN` (repository-level)
 
 ---
 
-## Adding a New Project
+### `run-n8n.yml`
 
-1. Add the project's workflow files under `.github/workflows/` (prefix with the project name, e.g. `myproject-*.yml`)
-2. Add any required secrets to this repo's Actions secrets
-3. If the project needs a Docker image, add a Dockerfile under `docker/<image-name>/` and a build workflow
-4. If the project needs Ollama, call `uses: ./.github/actions/ollama` — no extra setup required
+Spawns an n8n session with ngrok tunnel and basic auth.
+
+**Inputs:**
+- `session_duration_hours` (required) — `1`, `2`, `3`, `4`, `5`, or `6`
+
+**Required secrets:**
+- `N8N_BASIC_AUTH_USER` (environment-level, any environment)
+- `N8N_BASIC_AUTH_PASSWORD` (environment-level, any environment)
+- `NGROK_AUTH_TOKEN` (repository-level)
+
+---
+
+### `build-comfyui-image.yml`
+
+Builds and pushes ComfyUI Docker image to GHCR.
+
+**Inputs:**
+- `model_profile` (required) — `basic` or `video-model`
+
+**Required secrets:**
+- `PRIVATE_REPO_PAT` (repository-level) — GitHub PAT with access to `Emergent-Genesis/comfyui-source-private`
+
+---
+
+### `build-ollama-image.yml`
+
+Builds and pushes Ollama Docker image to GHCR.
+
+**Inputs:**
+- `model` (required) — `mistral-7b` (only option currently)
+
+**Required secrets:**
+- None (uses built-in `GITHUB_TOKEN`)
+
+---
+
+### `content-analytics.yml`
+
+Runs content analytics against a YouTube channel.
+
+**Inputs:**
+- `sessions` (optional) — number of sessions (default: `5`)
+- `headless` (optional) — run headless (default: `true`)
+
+**Required secrets:**
+- `GH_TOKEN` (repository-level)
+- `VIDEO_BASE_URL` (repository-level) — base URL for video content

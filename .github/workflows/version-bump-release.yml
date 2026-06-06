@@ -1,0 +1,150 @@
+name: "Version Bump & Release Notes"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AUTO-INCREMENT BUILD NUMBERS AND GENERATE RELEASE NOTES
+# Checks out the TARGET project, bumps its version, commits and pushes back.
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:
+    inputs:
+      project:
+        description: "Select project"
+        type: choice
+        required: true
+        options:
+          - astroaugur
+          - finance-os
+      bump_type:
+        description: "Version bump type"
+        type: choice
+        required: false
+        default: "patch"
+        options:
+          - major
+          - minor
+          - patch
+          - build
+
+permissions:
+  contents: write
+
+jobs:
+  version-bump:
+    name: "📦 Bump Version"
+    runs-on: ubuntu-latest
+    outputs:
+      old_version: ${{ steps.version.outputs.old_version }}
+      new_version: ${{ steps.version.outputs.new_version }}
+      release_notes: ${{ steps.release_notes.outputs.notes }}
+
+    steps:
+      - name: Determine target repository
+        id: target-repo
+        run: |
+          REPO_OWNER=$(echo "${{ github.repository }}" | cut -d'/' -f1)
+          PROJECT_NAME="${{ github.event.inputs.project }}"
+          echo "owner=$REPO_OWNER"  >> "$GITHUB_OUTPUT"
+          echo "name=$PROJECT_NAME" >> "$GITHUB_OUTPUT"
+          echo "url=https://github.com/${REPO_OWNER}/${PROJECT_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout target project
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.target-repo.outputs.owner }}/${{ steps.target-repo.outputs.name }}
+          token: ${{ secrets.GH_TOKEN }}
+          fetch-depth: 0
+
+      - name: Parse current version
+        id: version
+        run: |
+          if [ -f "package.json" ]; then
+            current_version=$(grep '"version"' package.json | head -1 | sed -E 's/.*"version":\s*"([^"]+)".*/\1/')
+          else
+            current_version="0.0.0"
+          fi
+
+          echo "old_version=$current_version" >> "$GITHUB_OUTPUT"
+
+          IFS='.' read -r major minor patch build <<< "$current_version"
+          build=${build:-0}
+
+          case "${{ github.event.inputs.bump_type }}" in
+            major) major=$((major + 1)); minor=0; patch=0; build=0 ;;
+            minor) minor=$((minor + 1)); patch=0; build=0 ;;
+            patch) patch=$((patch + 1)); build=0 ;;
+            build) build=$((build + 1)) ;;
+          esac
+
+          new_version="$major.$minor.$patch"
+          if [ "$build" -gt 0 ]; then
+            new_version="$new_version.$build"
+          fi
+
+          echo "new_version=$new_version" >> "$GITHUB_OUTPUT"
+          echo "✅ Version bump: $current_version → $new_version"
+
+      - name: Generate release notes from commits
+        id: release_notes
+        run: |
+          last_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+
+          if [ -z "$last_tag" ]; then
+            commits=$(git log --oneline --pretty=format:"%h %s" | head -20)
+          else
+            commits=$(git log "$last_tag"..HEAD --oneline --pretty=format:"%h %s" | head -20)
+          fi
+
+          release_notes="## 🚀 Release ${{ steps.version.outputs.new_version }}\n\n"
+          release_notes+="### 📝 Changes\n"
+          release_notes+="$(echo "$commits" | sed 's/^/- /')\n\n"
+          release_notes+="**Build:** #${{ github.run_number }}\n"
+          release_notes+="**Project:** ${{ github.event.inputs.project }}\n"
+          release_notes+="**Generated:** $(date -u +'%Y-%m-%d %H:%M:%S UTC')\n"
+
+          echo -e "$release_notes" > release_notes.txt
+          echo "notes=$(echo "$release_notes" | base64 -w 0)" >> "$GITHUB_OUTPUT"
+          echo "Release notes generated:"
+          cat release_notes.txt
+
+      - name: Update version in package.json
+        run: |
+          if [ -f "package.json" ]; then
+            sed -i.bak "s/\"version\": \"[^\"]*\"/\"version\": \"${{ steps.version.outputs.new_version }}\"/" package.json
+            rm -f package.json.bak
+            echo "✅ Updated package.json version"
+          fi
+
+      - name: Commit and tag
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add package.json
+          git commit -m "chore: bump version to ${{ steps.version.outputs.new_version }}"
+          git tag -a "v${{ steps.version.outputs.new_version }}" -m "Release ${{ steps.version.outputs.new_version }}"
+          echo "✅ Committed and tagged version ${{ steps.version.outputs.new_version }}"
+
+      - name: Push to target project
+        run: |
+          git push origin HEAD
+          git push origin "v${{ steps.version.outputs.new_version }}"
+          echo "✅ Pushed version ${{ steps.version.outputs.new_version }} to ${{ steps.target-repo.outputs.url }}"
+
+      - name: Summary
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "✅ Version Bump Complete"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Project: ${{ github.event.inputs.project }}"
+          echo "Old Version: ${{ steps.version.outputs.old_version }}"
+          echo "New Version: ${{ steps.version.outputs.new_version }}"
+          echo "Bump Type: ${{ github.event.inputs.bump_type }}"
+          echo "Target Repository: ${{ steps.target-repo.outputs.url }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+      - name: Upload release notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes-${{ steps.version.outputs.new_version }}
+          path: release_notes.txt
+          retention-days: 90

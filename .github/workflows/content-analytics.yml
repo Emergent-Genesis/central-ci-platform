@@ -1,0 +1,56 @@
+name: Content Analytics
+
+on:
+  workflow_dispatch:
+    inputs:
+      sessions:
+        description: 'Number of analysis sessions'
+        default: '5'
+        required: false
+        type: string
+      headless:
+        description: 'Run in headless mode'
+        default: true
+        required: false
+        type: boolean
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout analytics source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/youtube-view-increaser
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium --with-deps
+
+      - name: Run analysis
+        env:
+          VIDEO_BASE_URL: ${{ secrets.VIDEO_BASE_URL }}
+        run: |
+          python main.py --sessions ${{ inputs.sessions }} ${{ inputs.headless && '--headless' || '' }} --delay 5
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: analytics-report-${{ github.run_number }}
+          path: report.html
+          retention-days: 90
+
+      - name: Upload session logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: session-logs-${{ github.run_number }}
+          path: logs/
+          retention-days: 30
