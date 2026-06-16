@@ -8,6 +8,8 @@ A centralised GitHub Actions hub for building, signing, and deploying multi-plat
 
 This repository contains no application code. It is a collection of reusable composite actions and workflow files that other private project repositories consume. A single workflow dispatch triggers checkout, build, sign, and deploy across web, Android, and iOS targets — all coordinated from one place.
 
+**Smart framework detection:** Build commands are automatically selected based on each project's `package.json`, supporting Next.js, Angular, React/Vite, and other frameworks without manual configuration.
+
 Supported projects are registered in `prepare-deployment.yml`. Each project maps to a GitHub Environment of the same name, isolating its secrets from other projects.
 
 ---
@@ -72,7 +74,7 @@ The service account must have the **Firebase App Distribution Admin** role (Fire
 | `FIREBASE_IOS_APP_ID` | iOS | Firebase console → **Project Settings → Your apps → (iOS app) → App ID** (format: `1:NNN:ios:xxx`) |
 | `FIREBASE_MEASUREMENT_ID` | Android, iOS | Firebase console → **Project Settings → Your apps → (Web app) → Measurement ID** (format: `G-XXXXXXXXXX`) |
 | `API_URL` | Android, iOS | Your backend — e.g. `https://api.myapp.com` |
-| `NEXT_PUBLIC_ADMIN_CODE` | Web (family-tree only) | Arbitrary string you define |
+| `ADMIN_CODE` | Web (family-tree only) | Arbitrary string you define |
 | `ANDROID_SIGNING_KEY_BASE64` | Android | Run `scripts/generate-android-keystore.sh` — output printed at end |
 | `ANDROID_KEY_ALIAS` | Android | Same script output |
 | `ANDROID_KEYSTORE_PASSWORD` | Android | Same script output |
@@ -92,16 +94,16 @@ The service account must have the **Firebase App Distribution Admin** role (Fire
 
 ### `multi-project-deploy.yml` (main workflow)
 
-Dispatches a build and deploy to web, Android, iOS, or all targets. Requires **environment secrets** from one of the three project environments (`astroaugur`, `finance-os`, `family-tree`).
+Dispatches a build and deploy to web, Android, iOS, or all targets. Requires **environment secrets** from one of the project environments (`astroaugur`, `finance-os`, `family-tree`, `personal-3d-portfolio`).
 
 **Inputs:**
-- `project` (required) — which project to deploy: `astroaugur`, `finance-os`, or `family-tree`
+- `project` (required) — which project to deploy: `astroaugur`, `finance-os`, `family-tree`, or `personal-3d-portfolio`
 - `deploy` (required) — which target(s): `web`, `android`, `ios`, or `all`
 - `deploy_channel` (optional) — Firebase Hosting channel: `preview` or `production` (default: `production`)
 - `tester_groups` (optional) — comma-separated Firebase App Distribution tester groups (default: `qa-team`)
 
 **Required secrets (all from the project environment):**
-- `FIREBASE_SERVICE_ACCOUNT`
+- `FIREBASE_SERVICE_ACCOUNT` (required for all projects)
 - `FIREBASE_ANDROID_APP_ID` (if deploying android or all)
 - `FIREBASE_IOS_APP_ID` (if deploying ios or all)
 - `FIREBASE_MEASUREMENT_ID` (if deploying android or ios)
@@ -109,7 +111,9 @@ Dispatches a build and deploy to web, Android, iOS, or all targets. Requires **e
 - `GH_TOKEN` (repository-level or environment-level)
 - Android signing secrets if deploying android (optional — auto-generated if absent)
 - iOS signing secrets if deploying ios (required)
-- `NEXT_PUBLIC_ADMIN_CODE` (if project is family-tree and deploying web)
+- `ADMIN_CODE` (if project is family-tree and deploying web)
+
+**Note:** `personal-3d-portfolio` only supports **web** deployment. Other projects support `web`, `android`, `ios`, or `all`.
 
 ---
 

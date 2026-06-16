@@ -11,6 +11,7 @@ on:
           - astroaugur
           - finance-os
           - family-tree
+          - personal-3d-portfolio
 
       deploy:
         description: "Select deployment target"
@@ -67,15 +68,48 @@ jobs:
           token: ${{ secrets.GH_TOKEN }}
           path: project-source
 
+      - name: Detect framework and build command
+        id: detect-framework
+        run: |
+          # Read package.json and detect framework type
+          PACKAGE_JSON="project-source/package.json"
+
+          if [ ! -f "$PACKAGE_JSON" ]; then
+            echo "❌ Error: package.json not found"
+            exit 1
+          fi
+
+          # Check for Next.js (next in dependencies or start script)
+          if grep -q '"next"' "$PACKAGE_JSON" || grep -q '"next start"' "$PACKAGE_JSON"; then
+            BUILD_CMD="npm run build"
+            FRAMEWORK="Next.js"
+          # Check for Angular (@angular/core in dependencies or ng in scripts)
+          elif grep -q '"@angular/core"' "$PACKAGE_JSON" || grep -q '"ng serve"' "$PACKAGE_JSON"; then
+            BUILD_CMD="npm run build:prod"
+            FRAMEWORK="Angular"
+          # Check for React/Vite (react in dependencies, build script exists)
+          elif grep -q '"react"' "$PACKAGE_JSON"; then
+            BUILD_CMD="npm run build"
+            FRAMEWORK="React/Vite"
+          # Default fallback
+          else
+            BUILD_CMD="npm run build"
+            FRAMEWORK="Generic/Unknown"
+          fi
+
+          echo "framework=$FRAMEWORK" >> $GITHUB_OUTPUT
+          echo "build_command=$BUILD_CMD" >> $GITHUB_OUTPUT
+          echo "✅ Detected framework: $FRAMEWORK → using: $BUILD_CMD"
+
       - name: Build Web App
         uses: ./.github/actions/build-web
         with:
           working_directory: project-source
-          build_command: ${{ github.event.inputs.project == 'family-tree' && 'npm run build' || 'npm run build:prod' }}
+          build_command: ${{ steps.detect-framework.outputs.build_command }}
           firebase_service_account: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           deploy_channel: ${{ github.event.inputs.deploy_channel }}
           channel_id: preview-${{ github.ref_name }}-${{ github.run_number }}
-          admin_code: ${{ github.event.inputs.project == 'family-tree' && secrets.NEXT_PUBLIC_ADMIN_CODE || '' }}
+          admin_code: ${{ github.event.inputs.project == 'family-tree' && secrets.ADMIN_CODE || '' }}
 
   deploy-android:
     name: "🤖 Android"

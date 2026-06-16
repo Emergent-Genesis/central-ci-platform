@@ -12,7 +12,7 @@ inputs:
   build_command:
     description: "NPM build command"
     required: false
-    default: "npm run build:prod"
+    default: "npm run build"
   firebase_service_account:
     description: "Firebase service account JSON (standard IAM credentials — see README)"
     required: true
@@ -25,7 +25,7 @@ inputs:
     required: false
     default: ""
   admin_code:
-    description: "NEXT_PUBLIC_ADMIN_CODE secret (optional — only needed for projects that use it)"
+    description: "ADMIN_CODE secret (optional — only needed for projects that use it)"
     required: false
     default: ""
 

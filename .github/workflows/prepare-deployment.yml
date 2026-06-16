@@ -55,6 +55,7 @@ jobs:
             [astroaugur]="AstroAugur"
             [finance-os]="Finance OS"
             [family-tree]="Family Tree"
+            [personal-3d-portfolio]="Personal 3D Portfolio"
           )
 
           # Validate and output project configuration
