@@ -114,7 +114,18 @@ runs:
     - name: Capacitor sync
       shell: bash
       working-directory: ${{ inputs.frontend_directory }}
-      run: npx cap sync android
+      run: |
+        npm install @capacitor/cli @capacitor/android
+        npx cap add android
+        
+        if [ -f "google-services.json" ]; then
+          cp google-services.json android/app/google-services.json
+        else
+          echo "Error: google-services.json was not found in the root of ${{ inputs.frontend_directory }}"
+          exit 1
+        fi
+        
+        npx cap sync android
 
     - name: Build release APK
       shell: bash
