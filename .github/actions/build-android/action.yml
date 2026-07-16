@@ -172,28 +172,31 @@ runs:
         APK_DIR="${FRONTEND_DIR}/android/app/build/outputs/apk/release"
         UNSIGNED_APK=$(find "$APK_DIR" -name "*-unsigned*.apk" | head -1)
         
-        # 1. Locate zipalign dynamically within the Android SDK build-tools
-        ZIPALIGN_BIN=$(find $ANDROID_HOME/build-tools/ -name "zipalign" | sort -V | tail -n 1)
-        if [ -z "$ZIPALIGN_BIN" ]; then
-          echo "❌ zipalign tool not found in Android SDK!"
+        # 1. Locate the latest Android build-tools folder
+        BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -n 1)
+        ZIPALIGN_BIN="$BUILD_TOOLS_DIR/zipalign"
+        APKSIGNER_BIN="$BUILD_TOOLS_DIR/apksigner"
+
+        if [ ! -f "$ZIPALIGN_BIN" ] || [ ! -f "$APKSIGNER_BIN" ]; then
+          echo "❌ Android build tools (zipalign/apksigner) not found!"
           exit 1
         fi
         
-        # 2. Align the unsigned APK first
+        # 2. Zipalign the unsigned APK FIRST
         ALIGNED_APK="${RUNNER_TEMP}/app-release-aligned.apk"
-        echo "Aligning APK using: $ZIPALIGN_BIN"
-        $ZIPALIGN_BIN -v 4 "$UNSIGNED_APK" "$ALIGNED_APK"
+        echo "Aligning APK..."
+        "$ZIPALIGN_BIN" -p -v 4 "$UNSIGNED_APK" "$ALIGNED_APK"
 
-        # 3. Sign the *aligned* APK using jarsigner
+        # 3. Sign the aligned APK SECOND using apksigner
         SIGNED_APK="${RUNNER_TEMP}/app-release-signed.apk"
-
-        jarsigner -verbose \
-          -sigalg SHA256withRSA -digestalg SHA-256 \
-          -keystore "$KEYSTORE_PATH" \
-          -storepass "$STORE_PASS" \
-          -keypass   "$KEY_PASS" \
-          -signedjar "$SIGNED_APK" \
-          "$ALIGNED_APK" "$KEY_ALIAS"
+        echo "Signing APK..."
+        "$APKSIGNER_BIN" sign \
+          --ks "$KEYSTORE_PATH" \
+          --ks-pass "pass:$STORE_PASS" \
+          --key-pass "pass:$KEY_PASS" \
+          --ks-key-alias "$KEY_ALIAS" \
+          --out "$SIGNED_APK" \
+          "$ALIGNED_APK"
 
         echo "signed_apk=$SIGNED_APK" >> "$GITHUB_OUTPUT"
 
