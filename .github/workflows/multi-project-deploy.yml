@@ -135,7 +135,6 @@ jobs:
           api_url: ${{ secrets.API_URL }}
           firebase_service_account_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           android_app_id: ${{ secrets.FIREBASE_ANDROID_APP_ID }}
-          ios_app_id: ${{ secrets.FIREBASE_IOS_APP_ID }}
           measurement_id: ${{ secrets.FIREBASE_MEASUREMENT_ID }}
           android_signing_key_base64: ${{ secrets.ANDROID_SIGNING_KEY_BASE64 }}
           android_key_alias: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -167,7 +166,6 @@ jobs:
         with:
           api_url: ${{ secrets.API_URL }}
           firebase_service_account_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          android_app_id: ${{ secrets.FIREBASE_ANDROID_APP_ID }}
           ios_app_id: ${{ secrets.FIREBASE_IOS_APP_ID }}
           measurement_id: ${{ secrets.FIREBASE_MEASUREMENT_ID }}
           ios_p12_base64: ${{ secrets.IOS_P12_BASE64 }}
