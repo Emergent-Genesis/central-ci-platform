@@ -24,6 +24,8 @@ Set these under **Settings → Secrets and variables → Actions → Repository 
 |--------|------------|-----------------|
 | `GH_TOKEN` | Personal Access Token used to checkout private project repos | GitHub → **Settings → Developer settings → Personal access tokens (classic)** → generate with `repo` scope and `read:packages` |
 | `NGROK_AUTH_TOKEN` | Auth token for ngrok tunnels (ComfyUI, n8n sessions) | [dashboard.ngrok.com](https://dashboard.ngrok.com) → **Your Authtoken** |
+| `CLOUDFLARE_API_TOKEN` | Deploys web builds to Cloudflare Pages (default web provider) | Cloudflare dashboard → **My Profile → API Tokens** → create with the "Edit Cloudflare Pages" template |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account the Pages project lives in | Cloudflare dashboard → right sidebar of any domain, or **Workers & Pages** overview page |
 
 ---
 
@@ -99,19 +101,24 @@ Dispatches a build and deploy to web, Android, iOS, or all targets. Requires **e
 **Inputs:**
 - `project` (required) — which project to deploy: `astroaugur`, `finance-os`, `family-tree`, or `personal-3d-portfolio`
 - `deploy` (required) — which target(s): `web`, `android`, `ios`, or `all`
-- `deploy_channel` (optional) — Firebase Hosting channel: `preview` or `production` (default: `production`)
+- `deploy_channel` (optional) — Hosting channel: `preview` or `production` (default: `production`)
+- `deploy_provider` (optional) — web hosting target: `cloudflare` or `firebase` (default: `cloudflare`). Only used when `deploy` is `web` or `all`.
+- `web_output_directory` (optional) — build output directory, relative to the project root, that gets uploaded to Cloudflare Pages, e.g. `dist`, `build`, `out` (default: `dist`). Not used for Firebase.
 - `tester_groups` (optional) — comma-separated Firebase App Distribution tester groups (default: `qa-team`)
 
-**Required secrets (all from the project environment):**
-- `FIREBASE_SERVICE_ACCOUNT` (required for all projects)
+**Required secrets (all from the project environment, unless noted):**
+- `FIREBASE_SERVICE_ACCOUNT` (required unless deploying web-only with `deploy_provider: cloudflare`; still required for android/ios)
 - `FIREBASE_ANDROID_APP_ID` (if deploying android or all)
 - `FIREBASE_IOS_APP_ID` (if deploying ios or all)
 - `FIREBASE_MEASUREMENT_ID` (if deploying android or ios)
 - `API_URL` (if deploying android or ios)
+- `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` (repository-level; required if deploying web with `deploy_provider: cloudflare`, the default)
 - `GH_TOKEN` (repository-level or environment-level)
 - Android signing secrets if deploying android (optional — auto-generated if absent)
 - iOS signing secrets if deploying ios (required)
 - `ADMIN_CODE` (if project is family-tree and deploying web)
+
+**Cloudflare Pages project naming:** the Cloudflare Pages project name is expected to match the `project` input exactly (e.g. project `astroaugur` deploys to a Cloudflare Pages project named `astroaugur`). Create the Pages project with that name beforehand.
 
 **Note:** `personal-3d-portfolio` only supports **web** deployment. Other projects support `web`, `android`, `ios`, or `all`.
 
@@ -193,3 +200,33 @@ Runs content analytics against a YouTube channel.
 **Required secrets:**
 - `GH_TOKEN` (repository-level)
 - `VIDEO_BASE_URL` (repository-level) — base URL for video content
+
+---
+
+### `bbt-web.yml`
+
+Checks out `bug-bounty-analyzer`, starts its FastAPI web interface, and exposes it via a Cloudflare `trycloudflare.com` tunnel for the duration of the session.
+
+**Inputs:**
+- `duration_hours` (required) — `1`, `2`, `3`, `4`, `5`, or `6`
+
+**Required secrets:**
+- `GH_TOKEN` (repository-level) — to checkout the private `bug-bounty-analyzer` repo
+
+**Note:** No ngrok token needed — uses Cloudflare's anonymous quick tunnels. Scan results (`results/`) are uploaded as a workflow artifact when the session ends.
+
+---
+
+### `bbt-scan.yml`
+
+Checks out `bug-bounty-analyzer` and runs a one-shot CLI security scan against a target URL, uploading the report as a workflow artifact.
+
+**Inputs:**
+- `target_url` (required) — e.g. `https://example.com`
+- `profile` (optional) — `fast`, `balanced`, or `thorough` (default: `balanced`)
+- `formats` (optional) — comma-separated output formats, e.g. `html,json` (default: `html,json`)
+- `auth_header` (optional) — auth header for authenticated scans
+- `auth_cookie` (optional) — session cookie for authenticated scans
+
+**Required secrets:**
+- `GH_TOKEN` (repository-level) — to checkout the private `bug-bounty-analyzer` repo

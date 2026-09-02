@@ -1,0 +1,141 @@
+name: Bug Bounty Web Interface
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration_hours:
+        description: "How long to keep the web interface live (hours)"
+        required: true
+        default: "2"
+        type: choice
+        options: ["1", "2", "3", "4", "5", "6"]
+
+jobs:
+  web-server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 370
+
+    steps:
+      - name: Checkout bug-bounty-analyzer
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/bug-bounty-analyzer
+          token: ${{ secrets.GH_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install "fastapi>=0.111.0" "uvicorn[standard]>=0.29.0"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: false
+
+      - name: Install Go security tools
+        run: |
+          go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest || true
+          go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest || true
+          go install github.com/projectdiscovery/katana/cmd/katana@latest || true
+          go install github.com/hahwul/dalfox/v2@latest || true
+          go install github.com/ffuf/ffuf/v2@latest || true
+          go install github.com/lc/gau/v2/cmd/gau@latest || true
+          go install github.com/tomnomnom/assetfinder@latest || true
+          go install github.com/tomnomnom/waybackurls@latest || true
+          nuclei -update-templates -silent || true
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
+      - name: Install system tools
+        run: sudo apt-get install -y -qq nmap nikto || true
+
+      - name: Start web server
+        run: |
+          nohup uvicorn web.app:app --host 0.0.0.0 --port 8080 --log-level warning \
+            > /tmp/uvicorn.log 2>&1 &
+          echo "Waiting for web server..."
+          for i in {1..20}; do
+            curl -sf http://localhost:8080/api/health && break || sleep 2
+          done
+          echo "Web server ready."
+
+      - name: Install cloudflared
+        run: |
+          curl -fsSL \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb \
+            -o /tmp/cf.deb
+          sudo dpkg -i /tmp/cf.deb
+
+      - name: Start Cloudflare tunnel
+        id: tunnel
+        run: |
+          nohup cloudflared tunnel --url http://localhost:8080 > /tmp/cf.log 2>&1 &
+          echo "Waiting for tunnel URL..."
+          CF_URL=""
+          for i in {1..40}; do
+            CF_URL=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' /tmp/cf.log | head -1)
+            [ -n "$CF_URL" ] && break
+            sleep 3
+          done
+          if [ -z "$CF_URL" ]; then
+            echo "ERROR: Tunnel URL not found after 2 minutes"
+            cat /tmp/cf.log
+            exit 1
+          fi
+          echo "tunnel_url=$CF_URL" >> $GITHUB_OUTPUT
+          echo "Tunnel live at: $CF_URL"
+
+      - name: Publish URL to job summary
+        env:
+          CF_URL: ${{ steps.tunnel.outputs.tunnel_url }}
+          DURATION: ${{ inputs.duration_hours }}
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << 'SUMMARY'
+          ## Bug Bounty Web Interface
+
+          SUMMARY
+          echo "**URL: [$CF_URL]($CF_URL)**" >> $GITHUB_STEP_SUMMARY
+          cat >> $GITHUB_STEP_SUMMARY << 'SUMMARY'
+
+          | Setting | Value |
+          |---------|-------|
+          SUMMARY
+          echo "| Session Duration | ${DURATION} hour(s) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tunnel | Cloudflare trycloudflare.com (no account needed) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Runner | ubuntu-latest |" >> $GITHUB_STEP_SUMMARY
+          cat >> $GITHUB_STEP_SUMMARY << 'SUMMARY'
+
+          ### Quick Start
+          1. Open the URL above in your browser
+          2. Enter target URL in the sidebar form
+          3. Select profile and click **Start Scan**
+          4. Watch the Dashboard tab update in real-time
+          5. View findings in the **Findings** tab, run exploits in **Exploit Demo**
+
+          > **Note**: URL is valid only while this Actions run is active.
+          > All scan results will be uploaded as artifacts when the session ends.
+          SUMMARY
+          echo "Live at: $CF_URL"
+
+      - name: Keep alive for session duration
+        run: |
+          SECONDS_TOTAL=$(( ${{ inputs.duration_hours }} * 3600 ))
+          echo "Keeping server alive for ${{ inputs.duration_hours }} hour(s)..."
+          sleep $SECONDS_TOTAL
+
+      - name: Upload session scan reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bbt-web-session-${{ github.run_id }}
+          path: results/
+          retention-days: 30
+          if-no-files-found: ignore

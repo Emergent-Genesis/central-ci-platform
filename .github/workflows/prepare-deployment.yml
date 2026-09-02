@@ -21,6 +21,11 @@ on:
         type: string
         required: false
         default: "production"
+      deploy_provider:
+        description: "Web hosting provider (firebase or cloudflare)"
+        type: string
+        required: false
+        default: "cloudflare"
     outputs:
       repo:
         description: "Project repository"
@@ -93,6 +98,19 @@ jobs:
               ;;
           esac
 
+          if [[ "$target" == "web" || "$target" == "all" ]]; then
+            provider="${{ inputs.deploy_provider }}"
+            case "$provider" in
+              firebase|cloudflare)
+                echo "✅ Valid web provider: $provider"
+                ;;
+              *)
+                echo "❌ Invalid deploy_provider: $provider (must be firebase or cloudflare)"
+                exit 1
+                ;;
+            esac
+          fi
+
       - name: Summary
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -102,4 +120,5 @@ jobs:
           echo "Repository: ${{ steps.config.outputs.repo }}"
           echo "Target: ${{ inputs.deploy_target }}"
           echo "Channel: ${{ inputs.deploy_channel }}"
+          echo "Web provider: ${{ inputs.deploy_provider }}"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

@@ -1,0 +1,182 @@
+name: Bug Bounty Scan
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: "Target URL to scan (e.g. https://example.com)"
+        required: true
+        type: string
+      profile:
+        description: "Scan profile"
+        required: false
+        default: balanced
+        type: choice
+        options:
+          - fast
+          - balanced
+          - thorough
+      formats:
+        description: "Output formats (comma-separated: html,json,pdf)"
+        required: false
+        default: "html,json"
+        type: string
+      auth_header:
+        description: "Auth header for authenticated scans (e.g. Authorization: Bearer TOKEN)"
+        required: false
+        type: string
+      auth_cookie:
+        description: "Session cookie for authenticated scans (e.g. session=abc123)"
+        required: false
+        type: string
+
+jobs:
+  scan:
+    name: Security Scan — ${{ inputs.target_url }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      PYTHONUNBUFFERED: "1"
+      GO_VERSION: "1.22"
+
+    steps:
+      - name: Checkout bug-bounty-analyzer
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/bug-bounty-analyzer
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: pip-${{ runner.os }}-
+
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Set up Go (for optional tools)
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Install Go-based security tools (optional)
+        run: |
+          echo "Installing Go tools — failures are non-fatal"
+          go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest || true
+          go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest || true
+          go install github.com/projectdiscovery/httpx/cmd/httpx@latest || true
+          go install github.com/projectdiscovery/katana/cmd/katana@latest || true
+          go install github.com/hahwul/dalfox/v2@latest || true
+          go install github.com/ffuf/ffuf/v2@latest || true
+          go install github.com/lc/gau/v2/cmd/gau@latest || true
+          go install github.com/tomnomnom/assetfinder@latest || true
+          go install github.com/hakluke/hakrawler@latest || true
+          go install github.com/tomnomnom/waybackurls@latest || true
+          # Update nuclei templates after install
+          nuclei -update-templates -silent || true
+          echo "Go tools installed"
+
+      - name: Install system tools (nmap, nikto)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq nmap nikto || true
+
+      - name: Verify tool availability
+        run: python main.py check-tools
+
+      - name: Run security scan
+        id: scan
+        continue-on-error: true
+        env:
+          TARGET_URL: ${{ inputs.target_url }}
+          PROFILE: ${{ inputs.profile }}
+          FORMATS: ${{ inputs.formats }}
+          AUTH_HEADER: ${{ inputs.auth_header }}
+          AUTH_COOKIE: ${{ inputs.auth_cookie }}
+        run: |
+          CMD="python main.py scan \"$TARGET_URL\" \
+            --output-dir ./results \
+            --profile \"$PROFILE\" \
+            --format \"$FORMATS\" \
+            --no-confirm"
+
+          if [ -n "$AUTH_HEADER" ]; then
+            CMD="$CMD --auth-header \"$AUTH_HEADER\""
+          fi
+          if [ -n "$AUTH_COOKIE" ]; then
+            CMD="$CMD --auth-cookie \"$AUTH_COOKIE\""
+          fi
+
+          echo "Running: $CMD"
+          eval $CMD
+
+      - name: Generate job summary
+        if: always()
+        run: |
+          echo "## Bug Bounty Scan Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Target | \`${{ inputs.target_url }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Profile | ${{ inputs.profile }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Formats | ${{ inputs.formats }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Scan Status | ${{ steps.scan.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Parse finding counts from JSON report if it exists
+          JSON_REPORT=$(find ./results -name "report.json" 2>/dev/null | head -1)
+          if [ -n "$JSON_REPORT" ]; then
+            echo "### Finding Summary" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            python3 - <<'EOF'
+          import json, os, sys
+
+          report_path = os.popen("find ./results -name 'report.json' 2>/dev/null | head -1").read().strip()
+          if not report_path:
+              print("No report.json found.")
+              sys.exit(0)
+
+          with open(report_path) as f:
+              data = json.load(f)
+
+          summary = data.get("summary", {})
+          by_sev = summary.get("by_severity", {})
+          total = summary.get("total", 0)
+          risk = summary.get("risk_score", 0)
+
+          out = os.environ.get("GITHUB_STEP_SUMMARY", "/dev/stdout")
+          with open(out, "a") as f:
+              f.write(f"| Severity | Count |\n")
+              f.write(f"|----------|-------|\n")
+              for sev in ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]:
+                  count = by_sev.get(sev, 0)
+                  emoji = {"CRITICAL": "🔴", "HIGH": "🟠", "MEDIUM": "🟡", "LOW": "🔵", "INFO": "⚪"}.get(sev, "")
+                  f.write(f"| {emoji} {sev} | {count} |\n")
+              f.write(f"\n**Total findings:** {total}  \n")
+              f.write(f"**Risk score:** {risk}/10\n")
+          EOF
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> Reports are available as a workflow artifact below." >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload scan results as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bbt-scan-results
+          path: results/
+          retention-days: 30
+          if-no-files-found: warn

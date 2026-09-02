@@ -32,6 +32,21 @@ on:
           - preview
           - production
 
+      deploy_provider:
+        description: "Web hosting provider (only used when deploy target is web or all)"
+        type: choice
+        required: false
+        default: "cloudflare"
+        options:
+          - cloudflare
+          - firebase
+
+      web_output_directory:
+        description: "Build output directory for Cloudflare Pages (e.g. dist, build, out)"
+        type: string
+        required: false
+        default: "dist"
+
       tester_groups:
         description: "Firebase tester groups (comma-separated)"
         type: string
@@ -49,6 +64,7 @@ jobs:
       project: ${{ github.event.inputs.project }}
       deploy_target: ${{ github.event.inputs.deploy }}
       deploy_channel: ${{ github.event.inputs.deploy_channel }}
+      deploy_provider: ${{ github.event.inputs.deploy_provider }}
 
   deploy-web:
     name: "🌐 Web"
@@ -106,10 +122,15 @@ jobs:
         with:
           working_directory: project-source
           build_command: ${{ steps.detect-framework.outputs.build_command }}
+          output_directory: ${{ github.event.inputs.web_output_directory }}
+          deploy_provider: ${{ github.event.inputs.deploy_provider }}
           firebase_service_account: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           deploy_channel: ${{ github.event.inputs.deploy_channel }}
           channel_id: preview-${{ github.ref_name }}-${{ github.run_number }}
           admin_code: ${{ github.event.inputs.project == 'family-tree' && secrets.ADMIN_CODE || '' }}
+          cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          cloudflare_project_name: ${{ github.event.inputs.project }}
 
   deploy-android:
     name: "🤖 Android"
@@ -189,7 +210,7 @@ jobs:
           echo "✅ Deployment Summary"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "Project : ${{ github.event.inputs.project }}"
-          echo "Web     : ${{ needs.deploy-web.result }}"
+          echo "Web     : ${{ needs.deploy-web.result }} (${{ github.event.inputs.deploy_provider }})"
           echo "Android : ${{ needs.deploy-android.result }}"
           echo "iOS     : ${{ needs.deploy-ios.result }}"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

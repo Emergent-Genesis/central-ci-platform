@@ -1,5 +1,5 @@
 name: "Build & Deploy Web"
-description: "Builds the web app and deploys to Firebase Hosting. Code must be checked out by the calling workflow before this action runs."
+description: "Builds the web app and deploys to Firebase Hosting or Cloudflare Pages. Code must be checked out by the calling workflow before this action runs."
 branding:
   icon: "globe"
   color: "orange"
@@ -13,9 +13,18 @@ inputs:
     description: "NPM build command"
     required: false
     default: "npm run build"
+  output_directory:
+    description: "Build output directory, relative to working_directory (e.g. dist, build, out). Only used for Cloudflare Pages."
+    required: false
+    default: "dist"
+  deploy_provider:
+    description: "Hosting provider to deploy to: firebase or cloudflare"
+    required: false
+    default: "cloudflare"
   firebase_service_account:
-    description: "Firebase service account JSON (standard IAM credentials — see README)"
-    required: true
+    description: "Firebase service account JSON (standard IAM credentials — see README). Required when deploy_provider is firebase; optional otherwise (still used to write runtime firebase-config.json for the app if provided)"
+    required: false
+    default: ""
   deploy_channel:
     description: "preview or production"
     required: false
@@ -28,18 +37,32 @@ inputs:
     description: "ADMIN_CODE secret (optional — only needed for projects that use it)"
     required: false
     default: ""
+  cloudflare_api_token:
+    description: "Cloudflare API token with Pages:Edit permission (required when deploy_provider is cloudflare)"
+    required: false
+    default: ""
+  cloudflare_account_id:
+    description: "Cloudflare account ID (required when deploy_provider is cloudflare)"
+    required: false
+    default: ""
+  cloudflare_project_name:
+    description: "Cloudflare Pages project name (required when deploy_provider is cloudflare)"
+    required: false
+    default: ""
 
 runs:
   using: "composite"
   steps:
     - name: Extract Firebase config
       id: firebase
+      if: inputs.firebase_service_account != ''
       uses: ./.github/actions/firebase-config
       with:
         service_account_json: ${{ inputs.firebase_service_account }}
 
     - name: Write firebase-config.json
       shell: bash
+      if: inputs.firebase_service_account != ''
       env:
         SA_JSON: ${{ inputs.firebase_service_account }}
         ADMIN_CODE: ${{ inputs.admin_code }}
@@ -77,6 +100,7 @@ runs:
       run: ${{ inputs.build_command }}
 
     - name: Deploy to Firebase Hosting
+      if: inputs.deploy_provider == 'firebase'
       uses: FirebaseExtended/action-hosting-deploy@v0  # v0
       with:
         repoToken: ${{ github.token }}
@@ -84,3 +108,14 @@ runs:
         channelId: ${{ inputs.deploy_channel == 'preview' && inputs.channel_id || 'live' }}
         projectId: ${{ steps.firebase.outputs.project_id }}
         entryPoint: ${{ inputs.working_directory }}
+
+    - name: Deploy to Cloudflare Pages
+      if: inputs.deploy_provider == 'cloudflare'
+      uses: cloudflare/pages-action@v1
+      with:
+        apiToken: ${{ inputs.cloudflare_api_token }}
+        accountId: ${{ inputs.cloudflare_account_id }}
+        projectName: ${{ inputs.cloudflare_project_name }}
+        directory: ${{ inputs.working_directory && format('{0}/{1}', inputs.working_directory, inputs.output_directory) || inputs.output_directory }}
+        branch: ${{ inputs.deploy_channel == 'preview' && github.ref_name || 'main' }}
+        gitHubToken: ${{ github.token }}

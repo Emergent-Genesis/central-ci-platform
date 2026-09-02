@@ -1,0 +1,67 @@
+name: Serve MarkItDown Gateway (MCP + website)
+
+on:
+  workflow_dispatch:
+    inputs:
+      session_duration_hours:
+        description: "Duration (hours) to keep the gateway session alive."
+        required: true
+        default: "1"
+        type: choice
+        options:
+          - "1"
+          - "2"
+          - "3"
+          - "4"
+          - "5"
+          - "6"
+
+env:
+  GATEWAY_PORT: 8000
+
+jobs:
+  serve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 390
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout markitdown-gateway
+        uses: actions/checkout@v4
+        with:
+          repository: emergent-genesis/markitdown-gateway
+          token: ${{ secrets.MARKITDOWN_GATEWAY_PAT }}
+          path: markitdown-gateway
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        working-directory: markitdown-gateway
+        run: pip install -r requirements.txt
+
+      - name: Start MarkItDown gateway
+        working-directory: markitdown-gateway
+        run: |
+          nohup uvicorn app:app --host 127.0.0.1 --port ${{ env.GATEWAY_PORT }} > gateway.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:${{ env.GATEWAY_PORT }}/health && break
+            sleep 1
+          done
+
+      - name: Start ngrok Tunnel
+        id: ngrok
+        uses: ./.github/actions/ngrok-tunnel
+        with:
+          port: ${{ env.GATEWAY_PORT }}
+          ngrok_token: ${{ secrets.NGROK_AUTH_TOKEN }}
+          service_name: MarkItDown Gateway
+          session_duration_hours: ${{ github.event.inputs.session_duration_hours }}
+
+      - name: Show gateway log on failure
+        if: failure()
+        working-directory: markitdown-gateway
+        run: cat gateway.log || true
